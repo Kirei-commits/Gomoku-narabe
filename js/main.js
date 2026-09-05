@@ -59,10 +59,11 @@
     state.mode = data.settings.mode === 'pvp' ? 'pvp' : 'ai';
     state.level = LEVEL_LABEL[data.settings.level] ? data.settings.level : 'normal';
     state.first = data.settings.first === 'ai' ? 'ai' : 'human';
-    // 未設定なら、指での操作かどうかで既定値を決める
-    state.confirmTap = data.settings.confirmTap === undefined
+    // 未設定(null/undefined)なら、指での操作かどうかで既定値を決める
+    var savedConfirm = data.settings.confirmTap;
+    state.confirmTap = (savedConfirm === undefined || savedConfirm === null)
       ? isCoarsePointer()
-      : !!data.settings.confirmTap;
+      : !!savedConfirm;
 
     el.level.value = state.level;
     el.first.value = state.first;
@@ -461,8 +462,13 @@
     return (ev.pointerType === 'touch' || ev.pointerType === 'pen') ? 1.0 : 0.62;
   }
 
-  function useConfirmFor(ev) {
-    return state.confirmTap || ev.pointerType === 'touch' || ev.pointerType === 'pen';
+  /**
+   * タップ確認を使うかどうか。設定だけで決める。
+   * 以前はここで pointerType === 'touch' を無条件にORしていたため、
+   * 設定をOFFにしてもタッチ端末では効かなかった（既定値の自動判定は init 側の役目）。
+   */
+  function useConfirmFor() {
+    return state.confirmTap;
   }
 
   function onPointerDown(ev) {
@@ -470,7 +476,7 @@
     if (!canHumanPlay()) return;
     var cell = renderer.cellAt(ev.clientX, ev.clientY, hitTolerance(ev));
     if (!cell) return;
-    if (useConfirmFor(ev)) {
+    if (useConfirmFor()) {
       // 押した時点で候補位置を表示する（指で隠れても十字線で位置が分かる）
       renderer.setPending(cell, currentPlayer());
       renderer.setHover(null);
@@ -482,9 +488,9 @@
   function onPointerMove(ev) {
     if (!canHumanPlay()) { renderer.setHover(null); return; }
     var cell = renderer.cellAt(ev.clientX, ev.clientY, hitTolerance(ev));
-    if (pointerDown && useConfirmFor(ev)) {
+    if (pointerDown && useConfirmFor()) {
       if (cell) renderer.setPending(cell, currentPlayer());   // 指をずらして微調整できる
-    } else if (!useConfirmFor(ev)) {
+    } else if (!useConfirmFor()) {
       renderer.setHover(cell, currentPlayer());
     }
   }
@@ -494,8 +500,10 @@
     if (!canHumanPlay()) return;
     var cell = renderer.cellAt(ev.clientX, ev.clientY, hitTolerance(ev));
 
-    if (!useConfirmFor(ev)) {
+    if (!useConfirmFor()) {
       if (cell) attemptPlace(cell.x, cell.y);
+      // 指では離した後にカーソルが残らないようにする
+      if (ev.pointerType !== 'mouse') renderer.setHover(null);
       return;
     }
 

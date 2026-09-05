@@ -30,6 +30,30 @@ describe('storage — 保存と復元', () => {
     assert.equal(again.bestStreak, 5);
   });
 
+  // 回帰: DEFAULTS.settings に無いキーは merge() で捨てられ、保存しても復元されなかった
+  test('設定キーはすべて保存して読み戻せる', () => {
+    const ls = fakeStorage();
+    const { Store } = loadCG(['storage.js'], { localStorage: ls });
+    const d = Store.load();
+    assert.ok('confirmTap' in d.settings, 'confirmTap が既定値に定義されていない');
+
+    d.settings.confirmTap = false;
+    d.settings.first = 'ai';
+    d.settings.sound = false;
+    Store.save(d);
+
+    const { Store: Store2 } = loadCG(['storage.js'], { localStorage: ls });
+    const again = Store2.load();
+    assert.equal(again.settings.confirmTap, false);
+    assert.equal(again.settings.first, 'ai');
+    assert.equal(again.settings.sound, false);
+  });
+
+  test('未設定の confirmTap は null（自動判定に委ねる）', () => {
+    const { Store } = loadCG(['storage.js'], { localStorage: fakeStorage() });
+    assert.equal(Store.load().settings.confirmTap, null);
+  });
+
   test('reset で初期値に戻る', () => {
     const ls = fakeStorage();
     const { Store } = loadCG(['storage.js'], { localStorage: ls });

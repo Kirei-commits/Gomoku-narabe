@@ -41,8 +41,7 @@ test.describe('レイアウトと操作性', () => {
     const view = page.viewportSize();
     await page.setViewportSize({ width: Math.round(view.width * 0.7), height: view.height });
     await page.waitForTimeout(400);                 // ResizeObserver の反映を待つ
-    await g.click(9, 9);
-    if (await g.moveCount() === 0) await g.click(9, 9);   // タップ確認ONの端末では2回必要
+    await g.place(9, 9);
     await expect(page.locator('#log li').first()).toContainText('J10');
   });
 

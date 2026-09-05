@@ -5,8 +5,8 @@ test.describe('ヒント', () => {
   test('推奨手の座標と理由が表示される', async ({ page }) => {
     const g = await openGame(page);
     await usePvp(page);
-    await g.click(7, 7);
-    await g.click(3, 3);
+    await g.place(7, 7);
+    await g.place(3, 3);
 
     await page.locator('#btn-hint').click();
     await expect(page.locator('#advice')).toBeVisible({ timeout: 5000 });
@@ -28,7 +28,7 @@ test.describe('ヒント', () => {
     await usePvp(page);
     await page.locator('#btn-hint').click();
     await expect(page.locator('#advice')).toBeVisible({ timeout: 5000 });
-    await g.click(7, 7);
+    await g.place(7, 7);
     await expect(page.locator('#advice')).toBeHidden();
   });
 });
@@ -39,7 +39,7 @@ test.describe('詰み筋(VCF)', () => {
     await usePvp(page);
     // 先手に四を作らせ、先手の手番で探索させる
     for (const [x, y] of [[3, 7], [0, 0], [4, 7], [0, 1], [5, 7], [0, 2], [6, 7], [0, 3]]) {
-      await g.click(x, y);
+      await g.place(x, y);
     }
     await page.locator('#btn-mate').click();
     await expect(page.locator('#advice-kind')).toHaveText('MATE', { timeout: 8000 });
@@ -55,8 +55,8 @@ test.describe('詰み筋(VCF)', () => {
   test('詰み筋が無ければ、その旨を伝える', async ({ page }) => {
     const g = await openGame(page);
     await usePvp(page);
-    await g.click(7, 7);
-    await g.click(3, 3);
+    await g.place(7, 7);
+    await g.place(3, 3);
     await page.locator('#btn-mate').click();
     await expect(page.locator('#advice-text')).toContainText('見つかりませんでした', { timeout: 8000 });
     await expect(page.locator('#mate-nav')).toBeHidden();
@@ -66,7 +66,7 @@ test.describe('詰み筋(VCF)', () => {
     const g = await openGame(page);
     await usePvp(page);
     for (const [x, y] of [[7, 7], [0, 0], [8, 7], [0, 1], [9, 7], [0, 2], [10, 7], [0, 3], [11, 7]]) {
-      await g.click(x, y);
+      await g.place(x, y);
     }
     await page.waitForTimeout(1200);
     await expect(page.locator('#btn-hint')).toBeDisabled();

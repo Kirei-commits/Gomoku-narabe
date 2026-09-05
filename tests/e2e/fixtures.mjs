@@ -36,9 +36,16 @@ export async function openGame(page) {
     return { x: box.x + cell * (1 + x), y: box.y + cell * (1 + y), cell };
   };
 
+  const hasTouch = await page.evaluate(() => 'ontouchstart' in window || navigator.maxTouchPoints > 0);
+
+  /** タップ確認が有効かを画面の状態から読む（設定はテスト中に切り替わりうる） */
+  const confirmOn = async () =>
+    (await page.locator('#btn-confirm-tap').innerText()).includes('ON');
+
   return {
     errors,
     point,
+    hasTouch,
     /** マウスで着手（タップ確認OFF時は1クリックで着手される） */
     async click(x, y) {
       const p = await point(x, y);
@@ -51,6 +58,23 @@ export async function openGame(page) {
       await page.touchscreen.tap(p.x + p.cell * offsetX, p.y + p.cell * offsetY);
       await page.waitForTimeout(160);
     },
+    /**
+     * その端末で「1手打つ」ための操作。
+     * タッチ端末ではタップ確認がONなので同じ位置を2回叩く必要がある。
+     * desktop/mobile どちらのプロジェクトでも同じ呼び出しで1手進むようにする。
+     */
+    async place(x, y) {
+      const p = await point(x, y);
+      const twice = await confirmOn();
+      const hit = async () => {
+        if (hasTouch) await page.touchscreen.tap(p.x, p.y);
+        else await page.mouse.click(p.x, p.y);
+        await page.waitForTimeout(120);
+      };
+      await hit();
+      if (twice) await hit();
+    },
+    confirmOn,
     text: (sel) => page.locator(sel).innerText(),
     moveCount: async () => Number(await page.locator('#move-count').innerText())
   };

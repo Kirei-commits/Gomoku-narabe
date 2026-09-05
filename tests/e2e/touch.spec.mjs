@@ -77,8 +77,8 @@ test.describe('タッチ操作', () => {
     await page.locator('#btn-confirm-tap').click();
     await expect(page.locator('#btn-confirm-tap')).toContainText('OFF');
     await g.tap(7, 7);
-    await g.tap(7, 7);
-    expect(await g.moveCount()).toBe(2);          // 確認が不要なので2手入る
+    await g.tap(5, 5);                            // 確認が不要なので1タップずつ着手される
+    expect(await g.moveCount()).toBe(2);
   });
 
   test('タップ確認の設定はリロード後も保持される', async ({ page }) => {

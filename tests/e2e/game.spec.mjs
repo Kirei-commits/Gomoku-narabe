@@ -17,10 +17,10 @@ test.describe('対局の基本', () => {
     const g = await openGame(page);
     await usePvp(page);
     for (const [x, y] of [[7, 7], [0, 0], [8, 7], [0, 1], [9, 7], [0, 2], [10, 7], [0, 3]]) {
-      await g.click(x, y);
+      await g.place(x, y);
     }
     expect(await g.moveCount()).toBe(8);
-    await g.click(11, 7);
+    await g.place(11, 7);
     await page.waitForTimeout(1200);
 
     await expect(page.locator('#overlay')).toBeVisible();
@@ -32,8 +32,8 @@ test.describe('対局の基本', () => {
   test('埋まっているマスには打てない', async ({ page }) => {
     const g = await openGame(page);
     await usePvp(page);
-    await g.click(7, 7);
-    await g.click(7, 7);
+    await g.place(7, 7);
+    await g.place(7, 7);
     expect(await g.moveCount()).toBe(1);
   });
 
@@ -41,7 +41,7 @@ test.describe('対局の基本', () => {
     const g = await openGame(page);
     await usePvp(page);
     for (const [x, y] of [[7, 7], [0, 0], [8, 7], [0, 1], [9, 7], [0, 2], [10, 7], [0, 3], [11, 7]]) {
-      await g.click(x, y);
+      await g.place(x, y);
     }
     await page.waitForTimeout(1000);
 
@@ -55,7 +55,7 @@ test.describe('対局の基本', () => {
     const g = await openGame(page);
     await usePvp(page);
     for (const [x, y] of [[7, 7], [0, 0], [8, 7], [0, 1], [9, 7], [0, 2], [10, 7], [0, 3], [11, 7]]) {
-      await g.click(x, y);
+      await g.place(x, y);
     }
     await page.waitForTimeout(1000);
     await page.locator('#btn-reset-score').click();
@@ -80,7 +80,7 @@ test.describe('AI対戦', () => {
       const g = await openGame(page);
       await page.selectOption('#level', level);
       await page.waitForTimeout(300);
-      await g.click(7, 7);
+      await g.place(7, 7);
       await expect.poll(g.moveCount, { timeout: 8000 }).toBe(2);
       await expect(page.locator('#status-text')).toContainText('あなた');
       expect(g.errors).toEqual([]);
@@ -97,13 +97,13 @@ test.describe('AI対戦', () => {
     const g = await openGame(page);
     await page.selectOption('#level', 'hard');
     await page.waitForTimeout(300);
-    await g.click(7, 7);
+    await g.place(7, 7);
     await page.locator('#btn-new').click();          // 応手が返る前にリセット
     await page.waitForTimeout(2500);
     expect(await g.moveCount()).toBe(0);
     await expect(page.locator('#overlay')).toBeHidden();
 
-    await g.click(7, 7);                             // その後も対局は継続できる
+    await g.place(7, 7);                             // その後も対局は継続できる
     await expect.poll(g.moveCount, { timeout: 8000 }).toBe(2);
   });
 });

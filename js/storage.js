@@ -17,7 +17,9 @@
     },
     streak: 0,
     bestStreak: 0,
-    settings: { mode: 'ai', level: 'normal', first: 'human', sound: true }
+    // confirmTap は null = 未設定（端末の入力方式から自動判定する）。
+    // ここに書き忘れたキーは merge() で捨てられ、保存しても復元されない。
+    settings: { mode: 'ai', level: 'normal', first: 'human', sound: true, confirmTap: null }
   };
 
   var memory = null; // localStorage が使えない環境のフォールバック
