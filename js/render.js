@@ -40,6 +40,10 @@
     this.size = 0; this.cell = 0; this.margin = 0; this.dpr = 1;
 
     this.hover = null;        // {x,y,player}
+    this.pending = null;      // タップ確認モードで選択中のマス {x,y,player}
+    this.hint = null;         // ヒントの推奨手 {x,y}
+    this.mate = null;         // 詰み筋 [{x,y,player}]
+    this.mateStep = -1;       // 詰み筋のうち強調する手のindex
     this.lastMove = null;     // {x,y,player}
     this.winLine = null;      // [[x,y], ...]
     this.winAt = 0;
@@ -78,8 +82,11 @@
 
   Renderer.prototype.px = function (i) { return this.margin + i * this.cell; };
 
-  /** クライアント座標 → 最寄りのマス（範囲外なら null） */
-  Renderer.prototype.cellAt = function (clientX, clientY) {
+  /**
+   * クライアント座標 → 最寄りのマス（範囲外なら null）。
+   * tolerance はマス幅に対する許容半径。指での操作では大きめの値を渡す。
+   */
+  Renderer.prototype.cellAt = function (clientX, clientY, tolerance) {
     var rect = this.canvas.getBoundingClientRect();
     if (!rect.width) return null;
     var scale = this.size / rect.width;
@@ -87,9 +94,11 @@
     var ly = (clientY - rect.top) * scale;
     var x = Math.round((lx - this.margin) / this.cell);
     var y = Math.round((ly - this.margin) / this.cell);
-    if (!B.inBounds(x, y)) return null;
+    x = Math.max(0, Math.min(N - 1, x));
+    y = Math.max(0, Math.min(N - 1, y));
+    var tol = (tolerance || 0.62) * this.cell;
     var dx = lx - this.px(x), dy = ly - this.px(y);
-    if (Math.sqrt(dx * dx + dy * dy) > this.cell * 0.62) return null;
+    if (Math.sqrt(dx * dx + dy * dy) > tol) return null;
     return { x: x, y: y };
   };
 
@@ -120,6 +129,20 @@
   Renderer.prototype.clearEffects = function () {
     this.anims = {}; this.ripples = []; this.particles = [];
     this.winLine = null; this.lastMove = null; this.hover = null;
+    this.pending = null; this.hint = null; this.mate = null; this.mateStep = -1;
+  };
+
+  Renderer.prototype.setPending = function (cell, player) {
+    this.pending = cell ? { x: cell.x, y: cell.y, player: player } : null;
+  };
+
+  Renderer.prototype.setHint = function (cell) {
+    this.hint = cell ? { x: cell.x, y: cell.y, t0: now() } : null;
+  };
+
+  Renderer.prototype.setMate = function (moves, step) {
+    this.mate = moves && moves.length ? moves : null;
+    this.mateStep = step === undefined ? -1 : step;
   };
 
   Renderer.prototype.setHover = function (cell, player) {
@@ -173,6 +196,9 @@
     this._drawHover(t);
     this._drawStones(t);
     this._drawLastMove(t);
+    this._drawMate(t);
+    this._drawHint(t);
+    this._drawPending(t);
     this._drawWinLine(t);
     this._drawRipples(t);
     this._drawParticles();
@@ -331,6 +357,116 @@
       ctx.stroke();
     }
     ctx.restore();
+  };
+
+  /** タップ確認モードの選択マーカー。指で隠れても位置が分かるよう十字線を引く。 */
+  Renderer.prototype._drawPending = function (t) {
+    if (!this.pending) return;
+    if (this.board[B.idx(this.pending.x, this.pending.y)] !== B.EMPTY) return;
+    var ctx = this.ctx, p = palette(this.pending.player);
+    var cx = this.px(this.pending.x), cy = this.px(this.pending.y);
+    var pulse = 0.5 + 0.5 * Math.sin(t / 200);
+
+    ctx.save();
+    // 盤の端まで伸びる十字線
+    ctx.strokeStyle = p.main;
+    ctx.globalAlpha = 0.35 + pulse * 0.2;
+    ctx.lineWidth = Math.max(1, this.cell * 0.05);
+    ctx.setLineDash([this.cell * 0.2, this.cell * 0.14]);
+    ctx.lineDashOffset = -t / 40;
+    ctx.beginPath();
+    ctx.moveTo(this.px(0) - this.margin * 0.5, cy);
+    ctx.lineTo(this.px(N - 1) + this.margin * 0.5, cy);
+    ctx.moveTo(cx, this.px(0) - this.margin * 0.5);
+    ctx.lineTo(cx, this.px(N - 1) + this.margin * 0.5);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 半透明の石
+    var r = this.cell * 0.42;
+    ctx.globalAlpha = 0.55;
+    var body = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.34, r * 0.1, cx, cy, r);
+    body.addColorStop(0, p.light);
+    body.addColorStop(0.45, p.main);
+    body.addColorStop(1, p.dark);
+    ctx.fillStyle = body;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+
+    // 外周のターゲットリング
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = Math.max(1.4, this.cell * 0.055);
+    ctx.shadowBlur = 12; ctx.shadowColor = p.main;
+    ctx.beginPath(); ctx.arc(cx, cy, r * (1.25 + pulse * 0.12), 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  };
+
+  /** ヒントの推奨手。琥珀色の照準で示す。 */
+  Renderer.prototype._drawHint = function (t) {
+    if (!this.hint) return;
+    var ctx = this.ctx;
+    var cx = this.px(this.hint.x), cy = this.px(this.hint.y);
+    var age = (t - this.hint.t0) / 1000;
+    var pulse = 0.5 + 0.5 * Math.sin(t / 180);
+    var r = this.cell * (0.5 + pulse * 0.12);
+
+    ctx.save();
+    ctx.strokeStyle = '#ffc75f';
+    ctx.shadowColor = '#ffc75f';
+    ctx.shadowBlur = 16;
+    ctx.globalAlpha = Math.max(0.45, 1 - age * 0.02);
+    ctx.lineWidth = Math.max(1.5, this.cell * 0.06);
+
+    // 四隅を欠いた照準リング
+    for (var i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, i * Math.PI / 2 + 0.28, i * Math.PI / 2 + Math.PI / 2 - 0.28);
+      ctx.stroke();
+    }
+    ctx.globalAlpha *= 0.85;
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.35, cy); ctx.lineTo(cx + r * 0.35, cy);
+    ctx.moveTo(cx, cy - r * 0.35); ctx.lineTo(cx, cy + r * 0.35);
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  /** 詰み筋。手順を番号付きの半透明の石で重ねる。 */
+  Renderer.prototype._drawMate = function (t) {
+    if (!this.mate) return;
+    var ctx = this.ctx;
+    var r = this.cell * 0.36;
+
+    for (var i = 0; i < this.mate.length; i++) {
+      var m = this.mate[i];
+      if (this.board[B.idx(m.x, m.y)] !== B.EMPTY) continue;
+      var focused = (this.mateStep === i);
+      var dimmed = (this.mateStep >= 0 && i > this.mateStep);
+      var p = palette(m.player);
+      var cx = this.px(m.x), cy = this.px(m.y);
+
+      ctx.save();
+      ctx.globalAlpha = dimmed ? 0.18 : (focused ? 0.92 : 0.5);
+
+      ctx.fillStyle = m.forced ? 'rgba(6,10,22,0.85)' : p.main;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+
+      ctx.strokeStyle = p.main;
+      ctx.lineWidth = Math.max(1.2, this.cell * (focused ? 0.07 : 0.04));
+      if (focused) { ctx.shadowBlur = 14; ctx.shadowColor = p.main; }
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+
+      // 手順番号
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = dimmed ? 0.3 : 1;
+      ctx.fillStyle = m.forced ? p.main : '#04121a';
+      ctx.font = '700 ' + Math.max(8, this.cell * 0.42).toFixed(1) + 'px "SFMono-Regular", Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(i + 1), cx, cy + this.cell * 0.015);
+      ctx.restore();
+    }
+    void t;
   };
 
   Renderer.prototype._drawWinLine = function (t) {

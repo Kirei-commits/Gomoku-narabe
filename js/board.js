@@ -79,6 +79,23 @@
     return out;
   }
 
+  /**
+   * player が置けば即座に5連が成立する空点の一覧。
+   * 四の受け所の特定や、詰み筋探索での「受け無し」判定に使う。
+   */
+  function winningPoints(board, player) {
+    var out = [];
+    var cands = candidates(board, 1);
+    for (var i = 0; i < cands.length; i++) {
+      var x = cands[i][0], y = cands[i][1], id = idx(x, y);
+      board[id] = player;
+      var win = findWinLine(board, x, y);
+      board[id] = EMPTY;
+      if (win) out.push([x, y]);
+    }
+    return out;
+  }
+
   /** 座標の表記（例: H8）。列は A..O、行は 1..15。 */
   function toCoord(x, y) {
     return String.fromCharCode(65 + x) + (y + 1);
@@ -88,6 +105,7 @@
   global.CG.Board = {
     SIZE: SIZE, EMPTY: EMPTY, P1: P1, P2: P2, WIN_LEN: WIN_LEN, DIRS: DIRS,
     idx: idx, inBounds: inBounds, opponent: opponent, create: create, get: get,
-    findWinLine: findWinLine, isFull: isFull, candidates: candidates, toCoord: toCoord
+    findWinLine: findWinLine, isFull: isFull, candidates: candidates,
+    winningPoints: winningPoints, toCoord: toCoord
   };
 })(window);

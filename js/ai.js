@@ -44,8 +44,22 @@
    * 4方向それぞれで最大パターンを取り、合計する（両三などの複合脅威は合算で評価される）。
    */
   function evalPoint(board, x, y, player) {
-    if (board[B.idx(x, y)] !== EMPTY) return -1;
-    var total = 0;
+    return scanPoint(board, x, y, player).total;
+  }
+
+  /**
+   * 単一方向での最大パターンスコア。
+   * evalPoint は4方向の合計なので「両三」も四と同等の値になるが、
+   * 四追い（VCF）の判定では「本当に四以上か」を見る必要があるためこちらを使う。
+   */
+  function threatLevel(board, x, y, player) {
+    return scanPoint(board, x, y, player).best;
+  }
+
+  /** (x,y) に player を置いた場合の、4方向の合計スコアと最大スコア */
+  function scanPoint(board, x, y, player) {
+    if (board[B.idx(x, y)] !== EMPTY) return { total: -1, best: -1 };
+    var total = 0, best = 0;
 
     for (var d = 0; d < B.DIRS.length; d++) {
       var dx = B.DIRS[d][0], dy = B.DIRS[d][1];
@@ -56,12 +70,14 @@
         if (v === player) { line += '1'; ones++; }
         else { line += (v === EMPTY ? '0' : '2'); } // 盤外(-1)と相手石はどちらも '2'
       }
-      total += matchLine(line, ones);
+      var sc = matchLine(line, ones);
+      total += sc;
+      if (sc > best) best = sc;
     }
     // 中央に近いほうがわずかに有利（同点時の指し手を安定させる）
     var c = (SIZE - 1) / 2;
     total += Math.max(0, 6 - (Math.abs(x - c) + Math.abs(y - c)) * 0.4);
-    return total;
+    return { total: total, best: best };
   }
 
   /** 並び文字列に最も高く合致するパターンのスコア（自石数で候補を絞り高速化） */
@@ -161,9 +177,9 @@
 
   /* --- 手の決定 ----------------------------------------------------- */
   var LEVELS = {
-    easy:   { depth: 0, branch: 6,  defense: 0.55, noise: 0.9,  budget: 120 },
-    normal: { depth: 2, branch: 8,  defense: 0.95, noise: 0.12, budget: 400 },
-    hard:   { depth: 4, branch: 10, defense: 1.05, noise: 0,    budget: 900 }
+    easy:   { depth: 0, branch: 6,  defense: 0.55, noise: 0.9,  budget: 120, vcf: false },
+    normal: { depth: 2, branch: 8,  defense: 0.95, noise: 0.12, budget: 400, vcf: false },
+    hard:   { depth: 4, branch: 10, defense: 1.05, noise: 0,    budget: 900, vcf: true }
   };
 
   /**
@@ -200,7 +216,13 @@
       if (counter) return xy(counter);
     }
 
-    // 5. 探索 or グリーディ
+    // 5. HARDのみ: 四追いで詰む筋があればそれを選ぶ
+    if (cfg.vcf) {
+      var mate = findMate(work, player, { maxAttacks: 5, budget: 350 });
+      if (mate && mate.moves.length) return { x: mate.moves[0].x, y: mate.moves[0].y };
+    }
+
+    // 6. 探索 or グリーディ
     if (cfg.depth > 0) {
       var deadline = now() + cfg.budget;
       var top = moves.slice(0, cfg.branch);
@@ -233,6 +255,126 @@
     return xy(picked);
   }
 
+  /* --- 四追い（VCF）による詰み筋探索 -------------------------------- */
+
+  /**
+   * 「四を作り続けて相手の応手を強制し、五を作る」手順を探す。
+   * 相手の受けは一意（五になる点）に限定されるため、探索は非常に狭い。
+   *
+   * @returns {{moves: Array, plies: number}|null}
+   *          moves は [{x, y, player, forced}] の並び。forced は相手の強制受け。
+   */
+  function findMate(board, attacker, options) {
+    var opt = options || {};
+    var maxAttacks = opt.maxAttacks || 6;                 // 自分が打つ手の上限
+    var deadline = now() + (opt.budget || 1500);
+    var work = Int8Array.from(board);
+
+    // 自分が今すぐ五を作れるなら、相手の脅威に関係なくそこで勝ち
+    var immediate = B.winningPoints(work, attacker);
+    if (immediate.length) {
+      return {
+        moves: [{ x: immediate[0][0], y: immediate[0][1], player: attacker, forced: false }],
+        plies: 1
+      };
+    }
+    // そうでなく相手が既に五を作れる状態なら、四追いは間に合わない
+    if (B.winningPoints(work, B.opponent(attacker)).length > 0) return null;
+
+    var line = vcf(work, attacker, maxAttacks, deadline);
+    if (!line) return null;
+    return { moves: line, plies: line.length };
+  }
+
+  function vcf(board, attacker, depth, deadline) {
+    if (depth <= 0 || now() > deadline) return null;
+    var defender = B.opponent(attacker);
+
+    // 五が作れるならそれで終わり
+    var immediate = B.winningPoints(board, attacker);
+    if (immediate.length) {
+      return [{ x: immediate[0][0], y: immediate[0][1], player: attacker, forced: false }];
+    }
+
+    var moves = forcingMoves(board, attacker);
+    for (var i = 0; i < moves.length; i++) {
+      if (now() > deadline) return null;
+      var m = moves[i], id = B.idx(m.x, m.y);
+      board[id] = attacker;
+
+      var result = null;
+      // 相手が先に五を作れてしまう筋は失敗
+      if (B.winningPoints(board, defender).length === 0) {
+        var wins = B.winningPoints(board, attacker);
+        if (wins.length >= 2) {
+          // 受け所が2つ以上 = 両方は止められないので詰み
+          result = [
+            { x: m.x, y: m.y, player: attacker, forced: false },
+            { x: wins[0][0], y: wins[0][1], player: defender, forced: true },
+            { x: wins[1][0], y: wins[1][1], player: attacker, forced: false }
+          ];
+        } else if (wins.length === 1) {
+          var bx = wins[0][0], by = wins[0][1], bid = B.idx(bx, by);
+          board[bid] = defender;
+          if (!B.findWinLine(board, bx, by)) {
+            var sub = vcf(board, attacker, depth - 1, deadline);
+            if (sub) {
+              result = [
+                { x: m.x, y: m.y, player: attacker, forced: false },
+                { x: bx, y: by, player: defender, forced: true }
+              ].concat(sub);
+            }
+          }
+          board[bid] = EMPTY;
+        }
+      }
+
+      board[id] = EMPTY;
+      if (result) return result;
+    }
+    return null;
+  }
+
+  /** 四（以上）を作る手だけを列挙する。相手に応手を強制できる手。 */
+  function forcingMoves(board, attacker) {
+    var cands = B.candidates(board, 1);
+    var out = [];
+    for (var i = 0; i < cands.length; i++) {
+      var x = cands[i][0], y = cands[i][1];
+      var best = threatLevel(board, x, y, attacker);
+      if (best >= SCORE.FOUR) out.push({ x: x, y: y, s: best });
+    }
+    out.sort(function (a, b) { return b.s - a.s; });
+    return out.slice(0, 12);
+  }
+
+  /* --- ヒント -------------------------------------------------------- */
+
+  /**
+   * 現局面での推奨手と、その理由のラベルを返す。
+   * 手の選択は難易度に依らず常に最強設定で行う。
+   */
+  function suggest(board, player) {
+    var move = chooseMove(board, player, 'hard');
+    if (!move) return null;
+    var opp = B.opponent(player);
+    var mine = threatLevel(board, move.x, move.y, player);
+    var theirs = threatLevel(board, move.x, move.y, opp);
+    var oppWins = B.winningPoints(board, opp).length > 0;
+
+    var label;
+    if (mine >= SCORE.FIVE) label = '五が完成して勝ちになります';
+    else if (oppWins && theirs >= SCORE.FIVE) label = '相手の五を止める、受けなければ負ける一手';
+    else if (mine >= SCORE.OPEN4) label = '四を作って相手に応手を強制できます';
+    else if (theirs >= SCORE.OPEN4) label = '相手の四を防ぐ受けの一手';
+    else if (theirs >= SCORE.OPEN3) label = '相手の三を止めて攻めを遅らせます';
+    else if (mine >= SCORE.OPEN3) label = '三を作って攻めを組み立てます';
+    else if (mine >= SCORE.OPEN2) label = '石を繋いで次の狙いを作ります';
+    else label = '形を整える一手です';
+
+    return { x: move.x, y: move.y, label: label };
+  }
+
   /** 条件に合う手のうち tie は key の大きいものを選ぶ */
   function pickBy(moves, test, key) {
     var best = null;
@@ -247,6 +389,9 @@
 
   global.CG.AI = {
     chooseMove: chooseMove,
+    findMate: findMate,
+    suggest: suggest,
+    threatLevel: threatLevel,
     evalPoint: evalPoint,
     evalBoard: evalBoard,
     SCORE: SCORE,

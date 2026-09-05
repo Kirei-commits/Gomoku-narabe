@@ -30,6 +30,8 @@
         <canvas id="board" width="600" height="600" role="grid"
                 aria-label="五目並べの盤面 15かける15" tabindex="0"></canvas>
 
+        <div id="review-badge" class="review-badge" hidden>REVIEW — 巻き戻し中</div>
+
         <div id="overlay" class="overlay" hidden>
           <div class="overlay-card">
             <p id="overlay-kicker" class="overlay-kicker">RESULT</p>
@@ -46,6 +48,37 @@
       <p id="status" class="status" role="status" aria-live="polite">
         <span class="dot" id="status-dot"></span><span id="status-text">対局開始 — 先手の番です</span>
       </p>
+
+      <!-- 盤面直下の主要操作。スマホでもスクロールせずに届く位置に置く -->
+      <div class="actionbar" role="group" aria-label="対局操作">
+        <button id="btn-back" class="abtn" type="button" title="一手戻す (U)">
+          <span class="ico">◀</span><span class="lbl">戻る</span>
+        </button>
+        <button id="btn-forward" class="abtn" type="button" title="一手進める (I)">
+          <span class="ico">▶</span><span class="lbl">進む</span>
+        </button>
+        <button id="btn-hint" class="abtn abtn-accent" type="button" title="次の一手を教えてもらう (H)">
+          <span class="ico">◎</span><span class="lbl">ヒント</span>
+        </button>
+        <button id="btn-mate" class="abtn abtn-accent" type="button" title="詰み筋を探す (T)">
+          <span class="ico">⚡</span><span class="lbl">詰み筋</span>
+        </button>
+      </div>
+
+      <!-- ヒント・詰み筋の結果表示 -->
+      <div id="advice" class="advice" hidden>
+        <div class="advice-head">
+          <span id="advice-kind" class="advice-kind">HINT</span>
+          <p id="advice-text" class="advice-text"></p>
+          <button id="advice-close" class="advice-close" type="button" aria-label="閉じる">×</button>
+        </div>
+        <div id="mate-nav" class="mate-nav" hidden>
+          <button id="mate-prev" class="mbtn" type="button" aria-label="前の手">◀</button>
+          <span id="mate-pos" class="mate-pos">1 / 1</span>
+          <button id="mate-next" class="mbtn" type="button" aria-label="次の手">▶</button>
+          <ol id="mate-list" class="mate-list"></ol>
+        </div>
+      </div>
     </section>
 
     <!-- ===== サイドパネル ===== -->
@@ -106,10 +139,15 @@
         <h2 class="card-title">CONTROL</h2>
         <div class="btn-row">
           <button id="btn-new" class="btn btn-primary" type="button">新規対局 <kbd>R</kbd></button>
-          <button id="btn-undo" class="btn" type="button">待った <kbd>U</kbd></button>
+          <button id="btn-latest" class="btn" type="button">最新の局面へ</button>
+          <button id="btn-confirm-tap" class="btn" type="button" aria-pressed="true">タップ確認 ON <kbd>C</kbd></button>
           <button id="btn-sound" class="btn" type="button" aria-pressed="true">♪ SOUND ON <kbd>M</kbd></button>
         </div>
-        <p class="hint">クリック / タップで着手。矢印キー＋Enterでも操作できます。</p>
+        <p class="hint">
+          <b>タップ確認 ON</b>: 1回目のタップで位置を決め、同じ場所をもう一度タップで確定します。
+          指で見えなくても十字線で位置が分かります。<br />
+          OFF にすると1回のタップですぐ着手します。矢印キー＋Enterでも操作できます。
+        </p>
       </div>
 
       <div class="card log-card">

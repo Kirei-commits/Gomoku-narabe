@@ -403,3 +403,151 @@ body {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; }
   .scanlines { display: none; }
 }
+
+/* =========================================================
+   操作バー / ヒント・詰み筋パネル（v1.1で追加）
+   ========================================================= */
+
+/* --- 盤面直下の操作バー ----------------------------------------- */
+.actionbar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  max-width: min(76vh, 660px);
+  margin: 10px auto 0;
+}
+.abtn {
+  /* 指で押しやすいよう最低44pxの高さを確保する */
+  min-height: 46px;
+  display: flex; align-items: center; justify-content: center; gap: .45em;
+  padding: 8px 6px;
+  font: inherit; font-size: .82rem; font-weight: 700; letter-spacing: .06em;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: .16s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.abtn .ico { font-size: .95em; opacity: .9; }
+.abtn:hover:not(:disabled) { border-color: var(--cyan); color: #fff; box-shadow: 0 0 14px rgba(0,229,255,.28); }
+.abtn:active:not(:disabled) { transform: scale(.97); }
+.abtn:disabled { opacity: .35; cursor: not-allowed; }
+.abtn-accent { border-color: rgba(255,199,95,.35); color: var(--amber); }
+.abtn-accent:hover:not(:disabled) { border-color: var(--amber); color: #fff; box-shadow: 0 0 14px rgba(255,199,95,.3); }
+.abtn.is-busy { opacity: .6; pointer-events: none; }
+
+/* --- ヒント / 詰み筋パネル --------------------------------------- */
+.advice {
+  max-width: min(76vh, 660px);
+  margin: 10px auto 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(255,199,95,.32);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(255,199,95,.08), rgba(10,18,38,.72));
+  backdrop-filter: blur(8px);
+  animation: slide-in .22s ease both;
+}
+.advice[hidden] { display: none; }
+.advice-head { display: flex; align-items: flex-start; gap: 10px; }
+.advice-kind {
+  flex: none;
+  padding: 3px 8px;
+  font-family: var(--mono); font-size: .6rem; font-weight: 700;
+  letter-spacing: .18em;
+  color: #2a1c00;
+  background: var(--amber);
+  border-radius: 5px;
+}
+.advice-text { margin: 0; flex: 1; font-size: .84rem; line-height: 1.6; }
+.advice-text b { color: var(--amber); font-family: var(--mono); }
+.advice-close {
+  flex: none;
+  width: 26px; height: 26px;
+  font: inherit; font-size: 1rem; line-height: 1;
+  color: var(--text-dim);
+  background: rgba(0,0,0,.3);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.advice-close:hover { color: var(--danger); border-color: var(--danger); }
+
+/* --- 詰み筋のステップ操作 --------------------------------------- */
+.mate-nav {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255,199,95,.2);
+}
+.mate-nav[hidden] { display: none; }
+.mbtn {
+  min-width: 40px; min-height: 40px;
+  font: inherit; font-size: .9rem;
+  color: var(--text);
+  background: rgba(0,0,0,.34);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  cursor: pointer;
+}
+.mbtn:hover:not(:disabled) { border-color: var(--amber); color: var(--amber); }
+.mbtn:disabled { opacity: .3; cursor: not-allowed; }
+.mate-pos {
+  font-family: var(--mono); font-size: .78rem;
+  color: var(--text-dim); letter-spacing: .08em;
+  min-width: 3.4em; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.mate-list {
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; gap: 5px;
+  margin: 2px 0 0; padding: 0; list-style: none;
+  font-family: var(--mono); font-size: .72rem;
+}
+.mate-list li {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: rgba(0,0,0,.3);
+  border: 1px solid transparent;
+  color: var(--text-dim);
+}
+.mate-list li.atk { color: var(--cyan); }
+.mate-list li.def { color: var(--magenta); }
+.mate-list li.is-current { border-color: var(--amber); color: var(--amber); background: rgba(255,199,95,.12); }
+
+/* --- 局面を巻き戻している間の表示 -------------------------------- */
+.board-frame.is-review { box-shadow: 0 0 0 1px rgba(255,199,95,.5) inset, 0 0 28px rgba(255,199,95,.18), 0 22px 60px rgba(0,0,0,.65); }
+.review-badge {
+  position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+  padding: 5px 12px;
+  font-family: var(--mono); font-size: .64rem; letter-spacing: .16em;
+  color: #2a1c00; background: var(--amber);
+  border-radius: 999px;
+  z-index: 4;
+  pointer-events: none;
+}
+.review-badge[hidden] { display: none; }
+
+/* --- 狭い画面での調整 -------------------------------------------- */
+@media (max-width: 900px) {
+  .actionbar, .advice { max-width: min(92vw, 560px); }
+}
+@media (max-width: 480px) {
+  .actionbar { gap: 6px; }
+  .abtn { font-size: .74rem; padding: 8px 3px; }
+  .abtn .ico { font-size: .9em; }
+  .abtn .lbl { letter-spacing: 0; }
+}
+/* 指の操作ではカーソル表示を消す。ページのスクロールは妨げない */
+@media (pointer: coarse) {
+  #board { cursor: default; }
+}
+
+/* 巻き戻しで未来になった手はログ上で薄く表示する */
+.log li.future { opacity: .35; }
+.log li.future .pos { text-decoration: line-through; }
