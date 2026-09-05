@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同じブランチへ続けてpushしたら古い実行は打ち切る
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: 静的検査とロジックテスト
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+
+      # lint は Node の標準機能だけで動くので依存のインストール前に実行できる
+      - name: 構文チェックと参照ファイルの整合性
+        run: npm run lint
+
+      - name: 依存をインストール
+        run: npm ci
+
+      - name: ロジックテスト（盤面・AI・詰み筋・永続化）
+        run: npm run test:logic
+
+  e2e:
+    name: ブラウザテスト
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 依存をインストール
+        run: npm ci
+
+      # --with-deps を省くとローカルでは通るのにCIだけ落ちる（libnss等が入らない）
+      - name: Chromium と実行に必要なシステムライブラリを導入
+        run: npx playwright install --with-deps chromium
+
+      - name: E2Eテスト（デスクトップ + スマホのタッチ操作）
+        run: npm run test:e2e
+
+      # 失敗したときこそレポートが要るので if: always() を必ず付ける
+      - name: テストレポートを保存
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+      - name: 失敗時のトレースとスクリーンショットを保存
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-test-results
+          path: test-results/
+          retention-days: 7

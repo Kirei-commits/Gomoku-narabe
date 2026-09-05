@@ -147,6 +147,13 @@
     return (global.performance && global.performance.now) ? global.performance.now() : Date.now();
   }
 
+  /**
+   * EASY のゆらぎに使う乱数。テストから固定シードの関数を差し込めるようにして、
+   * 対戦結果を再現可能にする（乱数任せだとテストがフレーキーになるため）。
+   */
+  var rng = function () { return Math.random(); };
+  function setRandom(fn) { rng = (typeof fn === 'function') ? fn : function () { return Math.random(); }; }
+
   function negamax(board, player, depth, alpha, beta, branch, deadline) {
     if (depth === 0) return evalBoard(board, player);
 
@@ -249,7 +256,7 @@
     var picked = pool[0];
     var bestNoisy = -Infinity;
     for (var k = 0; k < pool.length; k++) {
-      var noisy = pool[k].score + Math.random() * top1 * cfg.noise;
+      var noisy = pool[k].score + rng() * top1 * cfg.noise;
       if (noisy > bestNoisy) { bestNoisy = noisy; picked = pool[k]; }
     }
     return xy(picked);
@@ -392,6 +399,7 @@
     findMate: findMate,
     suggest: suggest,
     threatLevel: threatLevel,
+    setRandom: setRandom,
     evalPoint: evalPoint,
     evalBoard: evalBoard,
     SCORE: SCORE,
