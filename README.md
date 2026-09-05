@@ -8,8 +8,8 @@
 ## 遊ぶ
 
 ```bash
-git clone https://github.com/Kirei-commits/gomoku-narabe.git
-cd gomoku-narabe
+git clone https://github.com/Kirei-commits/Gomoku-narabe.git
+cd Gomoku-narabe
 open index.html            # macOS（Linux: xdg-open / Windows: start）
 ```
 
