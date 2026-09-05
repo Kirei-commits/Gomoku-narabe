@@ -51,6 +51,32 @@ describe('詰み筋(VCF) — 基本', () => {
   });
 });
 
+describe('詰み筋(VCF) — 探索の深さ', () => {
+  test('maxAttacks を増やすと、より多く・より長い詰みが見つかる', () => {
+    AI.setRandom(seededRandom(7));
+    let shallow = 0, deep = 0, longest = 0;
+
+    for (let g = 0; g < 10; g++) {
+      const b = B.create();
+      let p = B.P1;
+      b[B.idx(6 + (g % 3), 7)] = p;
+      p = B.P2;
+      for (let n = 1; n < 40; n++) {
+        if (AI.findMate(b, p, { maxAttacks: 2, budget: 800 })) shallow++;
+        const r = AI.findMate(b, p, { maxAttacks: 10, budget: 2500 });
+        if (r) { deep++; longest = Math.max(longest, r.moves.length); }
+        const m = AI.chooseMove(b, p, p === B.P1 ? 'normal' : 'easy');
+        if (!m) break;
+        b[B.idx(m.x, m.y)] = p;
+        if (B.findWinLine(b, m.x, m.y)) break;
+        p = B.opponent(p);
+      }
+    }
+    assert.ok(deep > shallow, `深く読んでも増えていない (浅い ${shallow} / 深い ${deep})`);
+    assert.ok(longest >= 7, `長い手順が見つかっていない (最長 ${longest}手)`);
+  });
+});
+
 describe('詰み筋(VCF) — 実戦局面での正当性', () => {
   test('自動対戦中に見つけた手順がすべて強制手順として成立する', () => {
     let found = 0, longest = 0, worstMs = 0;

@@ -13,13 +13,16 @@
       easy:   { win: 0, lose: 0, draw: 0 },
       normal: { win: 0, lose: 0, draw: 0 },
       hard:   { win: 0, lose: 0, draw: 0 },
-      pvp:    { win: 0, lose: 0, draw: 0 } // win=先手(P1)勝ち, lose=後手(P2)勝ち
+      pvp:    { win: 0, lose: 0, draw: 0 }, // win=先手(P1)勝ち, lose=後手(P2)勝ち
+      puzzle: { win: 0, lose: 0, draw: 0 }  // win=正解, lose=失敗
     },
     streak: 0,
     bestStreak: 0,
-    // confirmTap は null = 未設定（端末の入力方式から自動判定する）。
     // ここに書き忘れたキーは merge() で捨てられ、保存しても復元されない。
-    settings: { mode: 'ai', level: 'normal', first: 'human', sound: true, confirmTap: null }
+    settings: {
+      mode: 'ai', level: 'normal', first: 'human', sound: true,
+      ruleset: 'free', puzzleLevel: 'normal'
+    }
   };
 
   var memory = null; // localStorage が使えない環境のフォールバック

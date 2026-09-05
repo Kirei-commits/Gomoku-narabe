@@ -43,6 +43,7 @@
     this.pending = null;      // タップ確認モードで選択中のマス {x,y,player}
     this.hint = null;         // ヒントの推奨手 {x,y}
     this.mate = null;         // 詰み筋 [{x,y,player}]
+    this.forbidden = null;    // 禁じ手の点 [[x,y], ...]
     this.mateStep = -1;       // 詰み筋のうち強調する手のindex
     this.lastMove = null;     // {x,y,player}
     this.winLine = null;      // [[x,y], ...]
@@ -130,6 +131,7 @@
     this.anims = {}; this.ripples = []; this.particles = [];
     this.winLine = null; this.lastMove = null; this.hover = null;
     this.pending = null; this.hint = null; this.mate = null; this.mateStep = -1;
+    this.forbidden = null;
   };
 
   Renderer.prototype.setPending = function (cell, player) {
@@ -138,6 +140,11 @@
 
   Renderer.prototype.setHint = function (cell) {
     this.hint = cell ? { x: cell.x, y: cell.y, t0: now() } : null;
+  };
+
+  /** 禁じ手の点。盤上に×で示して、打てない場所を事前に分かるようにする。 */
+  Renderer.prototype.setForbidden = function (points) {
+    this.forbidden = (points && points.length) ? points : null;
   };
 
   Renderer.prototype.setMate = function (moves, step) {
@@ -193,6 +200,7 @@
     this._drawGrid(t);
     this._drawLabels();
     this._drawStars();
+    this._drawForbidden();
     this._drawHover(t);
     this._drawStones(t);
     this._drawLastMove(t);
@@ -259,6 +267,25 @@
       ctx.beginPath();
       ctx.arc(this.px(pts[i][0]), this.px(pts[i][1]), Math.max(1.6, this.cell * 0.07), 0, Math.PI * 2);
       ctx.fill();
+    }
+    ctx.restore();
+  };
+
+  Renderer.prototype._drawForbidden = function () {
+    if (!this.forbidden) return;
+    var ctx = this.ctx, r = this.cell * 0.2;
+    ctx.save();
+    ctx.strokeStyle = '#ff4d6d';
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = Math.max(1.2, this.cell * 0.055);
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = 6; ctx.shadowColor = '#ff4d6d';
+    for (var i = 0; i < this.forbidden.length; i++) {
+      var cx = this.px(this.forbidden[i][0]), cy = this.px(this.forbidden[i][1]);
+      ctx.beginPath();
+      ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
+      ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r);
+      ctx.stroke();
     }
     ctx.restore();
   };

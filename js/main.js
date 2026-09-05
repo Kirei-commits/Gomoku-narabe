@@ -3,12 +3,17 @@
  *
  * 棋譜は history に全て保持し、cursor が「盤に反映されている手数」を指す。
  * cursor < history.length の間は「巻き戻し中(レビュー)」で、AIは動かず勝敗も確定しない。
+ *
+ * 着手は「押す → 動かして狙いを決める → 離す」のドラッグ操作に統一している。
+ * 指で盤が隠れても十字線で位置が分かり、盤の外へ動かして離せば取り消せる。
  */
 (function (global) {
   'use strict';
 
   var B = global.CG.Board;
   var AI = global.CG.AI;
+  var Rules = global.CG.Rules;
+  var Puzzle = global.CG.Puzzle;
   var Sfx = global.CG.Sfx;
   var Store = global.CG.Store;
 
@@ -20,34 +25,39 @@
 
   var state = {
     board: B.create(),
-    history: [],        // [{x, y, player}] 打たれた手の全て
-    cursor: 0,          // 盤に反映されている手数
-    mode: 'ai',
+    history: [],
+    cursor: 0,
+    mode: 'ai',              // 'ai' | 'pvp' | 'puzzle'
     level: 'normal',
     first: 'human',
+    ruleset: 'free',
+    rules: null,
     humanPlayer: B.P1,
     over: false,
     winner: 0,
     winLine: null,
     thinking: false,
-    busy: false,        // ヒント/詰み筋の計算中
-    recorded: false,    // この対局の戦績を記録済みか
-    confirmTap: true,   // タップ確認モード
-    pending: null,      // 確認待ちのマス {x, y}
-    mate: null,         // 詰み筋 [{x, y, player, forced}]
+    busy: false,
+    recorded: false,
+    pending: null,           // ドラッグ中の狙い {x, y}
+    dragging: false,
+    mate: null,
     mateStep: 0,
-    gen: 0              // 対局世代。中断された非同期処理を無効化する
+    puzzle: null,            // {board, attacker, solution, plies}
+    puzzleState: 'idle',     // 'idle' | 'solving' | 'solved' | 'failed'
+    gen: 0
   };
 
   var LEVEL_LABEL = { easy: 'EASY', normal: 'NORMAL', hard: 'HARD' };
   var IDS = [
     'board', 'overlay', 'overlay-kicker', 'overlay-title', 'overlay-sub',
-    'btn-rematch', 'btn-close-overlay', 'status-dot', 'status-text', 'ai-options',
+    'btn-rematch', 'btn-close-overlay', 'status-dot', 'status-text',
+    'ai-options', 'rule-field', 'rule-note', 'ruleset', 'puzzle-options', 'puzzle-level',
     'level', 'first', 'p1', 'p2', 'p1-name', 'p2-name', 'p1-tag', 'p2-tag',
-    's1-label', 's2-label', 's1', 's2', 's3', 'streak', 'best-streak',
-    'btn-new', 'btn-latest', 'btn-confirm-tap', 'btn-sound', 'btn-reset-score',
+    's1-label', 's2-label', 's3-label', 's1', 's2', 's3', 'streak', 'best-streak',
+    'btn-new', 'btn-latest', 'btn-sound', 'btn-reset-score',
     'move-count', 'log', 'review-badge',
-    'btn-back', 'btn-forward', 'btn-hint', 'btn-mate',
+    'btn-back', 'btn-forward', 'btn-hint', 'btn-mate', 'btn-restart', 'btn-restart-label',
     'advice', 'advice-kind', 'advice-text', 'advice-close',
     'mate-nav', 'mate-prev', 'mate-next', 'mate-pos', 'mate-list'
   ];
@@ -56,21 +66,19 @@
   function init() {
     IDS.forEach(function (id) { el[id] = $(id); });
 
-    state.mode = data.settings.mode === 'pvp' ? 'pvp' : 'ai';
+    state.mode = ['ai', 'pvp', 'puzzle'].indexOf(data.settings.mode) >= 0 ? data.settings.mode : 'ai';
     state.level = LEVEL_LABEL[data.settings.level] ? data.settings.level : 'normal';
     state.first = data.settings.first === 'ai' ? 'ai' : 'human';
-    // 未設定(null/undefined)なら、指での操作かどうかで既定値を決める
-    var savedConfirm = data.settings.confirmTap;
-    state.confirmTap = (savedConfirm === undefined || savedConfirm === null)
-      ? isCoarsePointer()
-      : !!savedConfirm;
+    state.ruleset = Rules.PRESETS[data.settings.ruleset] ? data.settings.ruleset : 'free';
 
     el.level.value = state.level;
     el.first.value = state.first;
+    el.ruleset.value = state.ruleset;
+    el['puzzle-level'].value = Puzzle.LEVELS[data.settings.puzzleLevel] ? data.settings.puzzleLevel : 'normal';
     Sfx.setEnabled(data.settings.sound !== false);
     syncModeButtons();
     syncSoundButton();
-    syncConfirmButton();
+    syncRuleNote();
 
     renderer = new global.CG.Renderer(el.board);
     renderer.setBoard(state.board);
@@ -80,17 +88,13 @@
     newGame(false);
   }
 
-  function isCoarsePointer() {
-    return !!(global.matchMedia && global.matchMedia('(pointer: coarse)').matches);
-  }
-
   function bindEvents() {
     el.board.addEventListener('pointerdown', onPointerDown);
     el.board.addEventListener('pointermove', onPointerMove);
     el.board.addEventListener('pointerup', onPointerUp);
     el.board.addEventListener('pointercancel', onPointerCancel);
     el.board.addEventListener('pointerleave', function () {
-      if (!state.confirmTap) renderer.setHover(null);
+      if (!state.dragging) renderer.setHover(null);
     });
     el.board.addEventListener('contextmenu', function (ev) { ev.preventDefault(); });
 
@@ -111,12 +115,18 @@
     el.first.addEventListener('change', function () {
       state.first = el.first.value; Sfx.ui(); persistSettings(); newGame(false);
     });
+    el.ruleset.addEventListener('change', function () {
+      state.ruleset = el.ruleset.value; Sfx.ui(); syncRuleNote(); persistSettings(); newGame(false);
+    });
+    el['puzzle-level'].addEventListener('change', function () {
+      Sfx.ui(); persistSettings(); newGame(false);
+    });
 
     el['btn-new'].addEventListener('click', function () { Sfx.ui(); newGame(true); });
+    el['btn-restart'].addEventListener('click', function () { Sfx.ui(); newGame(true); });
     el['btn-rematch'].addEventListener('click', function () { Sfx.ui(); newGame(true); });
-    el['btn-close-overlay'].addEventListener('click', function () { Sfx.ui(); hideOverlay(); });
+    el['btn-close-overlay'].addEventListener('click', function () { Sfx.ui(); hideOverlay(); updateUI(); });
     el['btn-sound'].addEventListener('click', toggleSound);
-    el['btn-confirm-tap'].addEventListener('click', toggleConfirmTap);
     el['btn-reset-score'].addEventListener('click', resetScore);
 
     el['btn-back'].addEventListener('click', function () { step(-1); });
@@ -132,32 +142,40 @@
   }
 
   /* ================= 局面の導出 ================= */
-
-  /** 最新の局面を見ているか（巻き戻し中でないか） */
   function atTip() { return state.cursor === state.history.length; }
 
-  /** 現在の手番 */
   function currentPlayer() {
     var last = state.history[state.cursor - 1];
-    return last ? B.opponent(last.player) : B.P1;
+    if (last) return B.opponent(last.player);
+    if (state.mode === 'puzzle' && state.puzzle) return state.puzzle.attacker;
+    return B.P1;
   }
 
   function isAiSide(player) {
-    return state.mode === 'ai' && player !== state.humanPlayer;
+    if (state.mode === 'ai') return player !== state.humanPlayer;
+    return false;                       // 詰め五目の受けは place() の中で自動的に返す
   }
 
-  /** 人間が今この局面で着手できるか */
   function canHumanPlay() {
-    return !state.over && !state.thinking && !state.busy && !isAiSide(currentPlayer());
+    if (state.over || state.thinking || state.busy) return false;
+    if (state.mode === 'puzzle' && state.puzzleState !== 'solving') return false;
+    return !isAiSide(currentPlayer());
   }
 
   function aiShouldMove() {
-    return atTip() && !state.over && isAiSide(currentPlayer());
+    return atTip() && !state.over && state.mode === 'ai' && isAiSide(currentPlayer());
+  }
+
+  /** その局面の勝ち筋（長連禁止なら6連以上は勝ちにしない） */
+  function winLineAt(board, x, y) {
+    return Rules.winLine(board, x, y, state.rules);
   }
 
   /** history[0..cursor) から盤面と勝敗を作り直す */
   function rebuild() {
-    state.board = B.create();
+    state.board = (state.mode === 'puzzle' && state.puzzle)
+      ? Int8Array.from(state.puzzle.board)
+      : B.create();
     state.winLine = null;
     state.over = false;
     state.winner = 0;
@@ -168,13 +186,24 @@
     }
     var last = state.history[state.cursor - 1];
     if (last) {
-      var line = B.findWinLine(state.board, last.x, last.y);
+      var line = winLineAt(state.board, last.x, last.y);
       if (line) { state.over = true; state.winner = last.player; state.winLine = line; }
     }
     if (!state.over && state.cursor > 0 && B.isFull(state.board)) {
       state.over = true; state.winner = 0;
     }
     renderer.setBoard(state.board);
+    refreshForbidden();
+  }
+
+  /** 現在の手番で打てない点を盤に反映する */
+  function refreshForbidden() {
+    if (!renderer) return;
+    if (state.over || !state.rules || state.rules.scope === 'none') {
+      renderer.setForbidden(null);
+      return;
+    }
+    renderer.setForbidden(Rules.forbiddenPoints(state.board, currentPlayer(), state.rules));
   }
 
   /* ================= ゲーム進行 ================= */
@@ -186,16 +215,33 @@
     state.busy = false;
     state.recorded = false;
     state.pending = null;
+    state.dragging = false;
     state.humanPlayer = (state.mode === 'ai' && state.first === 'ai') ? B.P2 : B.P1;
 
+    // 詰め五目は禁じ手なしで出題する（解答が禁じ手で崩れないようにする）
+    state.rules = Rules.get(state.mode === 'puzzle' ? 'free' : state.ruleset);
+    AI.setRules(state.rules.scope === 'none' ? null : state.rules);
+
     renderer.clearEffects();
-    rebuild();
     clearAdvice();
     hideOverlay();
-    renderLog();
-    updateUI();
     if (withSound) Sfx.ui();
 
+    if (state.mode === 'puzzle') {
+      state.puzzle = null;
+      state.puzzleState = 'idle';
+      rebuild();
+      renderLog();
+      updateUI();
+      loadPuzzle();
+      return;
+    }
+
+    state.puzzle = null;
+    state.puzzleState = 'idle';
+    rebuild();
+    renderLog();
+    updateUI();
     if (aiShouldMove()) scheduleAi();
   }
 
@@ -203,21 +249,28 @@
   function attemptPlace(x, y) {
     if (state.over) {
       Sfx.error();
-      flash('この対局は終了しています。「新規対局」または「戻る」で続けられます。');
+      flash('この対局は終了しています。「新規」で次の対局を始められます。');
       return;
     }
     if (state.thinking || state.busy) { Sfx.error(); return; }
+    if (state.mode === 'puzzle' && state.puzzleState !== 'solving') { Sfx.error(); return; }
     if (isAiSide(currentPlayer())) {
       Sfx.error();
       flash('いまはCPUの手番です。「戻る」でもう一手戻すとあなたの手番になります。');
       return;
     }
     if (!B.inBounds(x, y) || state.board[B.idx(x, y)] !== B.EMPTY) { Sfx.error(); return; }
+
+    var reason = Rules.forbiddenReason(state.board, x, y, currentPlayer(), state.rules);
+    if (reason) {
+      Sfx.error();
+      flash(B.toCoord(x, y) + ' は禁じ手（' + reason + '）です。別の場所に打ってください。');
+      return;
+    }
     place(x, y, currentPlayer());
   }
 
   function place(x, y, player) {
-    // 巻き戻した位置から打った場合は、その先の手を破棄する
     if (!atTip()) state.history.length = state.cursor;
 
     state.history.push({ x: x, y: y, player: player });
@@ -231,10 +284,13 @@
     clearAdvice();
     Sfx.place(player);
 
-    var line = B.findWinLine(state.board, x, y);
+    var line = winLineAt(state.board, x, y);
     if (line) { finish(player, line); return; }
     if (B.isFull(state.board)) { finish(0, null); return; }
 
+    if (state.mode === 'puzzle') { handlePuzzleReply(x, y); return; }
+
+    refreshForbidden();
     renderLog();
     updateUI();
     if (aiShouldMove()) scheduleAi();
@@ -253,9 +309,9 @@
         try {
           move = AI.chooseMove(state.board, player, state.level);
         } catch (err) {
-          move = fallbackMove();
+          move = fallbackMove(player);
         }
-        if (!move || state.board[B.idx(move.x, move.y)] !== B.EMPTY) move = fallbackMove();
+        if (!move || state.board[B.idx(move.x, move.y)] !== B.EMPTY) move = fallbackMove(player);
         state.thinking = false;
         if (gen !== state.gen || state.over || !move) { updateUI(); return; }
         place(move.x, move.y, player);
@@ -263,12 +319,13 @@
     });
   }
 
-  /** AIが手を返せなかった場合の保険 */
-  function fallbackMove() {
+  /** AIが手を返せなかった場合の保険（禁じ手も避ける） */
+  function fallbackMove(player) {
     var c = (B.SIZE - 1) / 2, best = null, bestD = Infinity;
     for (var y = 0; y < B.SIZE; y++) {
       for (var x = 0; x < B.SIZE; x++) {
         if (state.board[B.idx(x, y)] !== B.EMPTY) continue;
+        if (Rules.forbiddenReason(state.board, x, y, player, state.rules)) continue;
         var d = Math.abs(x - c) + Math.abs(y - c);
         if (d < bestD) { bestD = d; best = { x: x, y: y }; }
       }
@@ -282,16 +339,25 @@
     state.winLine = line;
     state.thinking = false;
     state.pending = null;
+    state.dragging = false;
     renderer.setPending(null);
     renderer.setHover(null);
+    renderer.setForbidden(null);
     if (line) renderer.setWinLine(line);
 
-    if (!state.recorded) { recordResult(winner); state.recorded = true; }
+    if (state.mode === 'puzzle') {
+      state.puzzleState = 'solved';
+      if (!state.recorded) { recordPuzzle(true); state.recorded = true; }
+    } else if (!state.recorded) {
+      recordResult(winner); state.recorded = true;
+    }
+
     renderLog();
     updateUI();
 
     if (winner === 0) Sfx.draw();
     else if (state.mode === 'pvp') Sfx.win();
+    else if (state.mode === 'puzzle') Sfx.win();
     else if (winner === state.humanPlayer) Sfx.win();
     else Sfx.lose();
 
@@ -301,15 +367,128 @@
     }, line ? 900 : 300);
   }
 
+  /* ================= 詰め五目 ================= */
+  function loadPuzzle() {
+    var gen = state.gen;
+    var level = el['puzzle-level'].value;
+    state.busy = true;
+    el['btn-restart'].classList.add('is-busy');
+    flash('問題を生成しています…');
+    updateUI();
+
+    global.requestAnimationFrame(function () {
+      global.setTimeout(function () {
+        var puzzle = null;
+        try {
+          puzzle = Puzzle.generate({ level: level, budget: 4000 });
+        } catch (err) { puzzle = null; }
+
+        state.busy = false;
+        el['btn-restart'].classList.remove('is-busy');
+        if (gen !== state.gen) return;
+
+        if (!puzzle) {
+          state.puzzleState = 'idle';
+          updateUI();
+          flash('問題を作れませんでした。「新規」でもう一度お試しください。');
+          return;
+        }
+        state.puzzle = puzzle;
+        state.puzzleState = 'solving';
+        state.history = [];
+        state.cursor = 0;
+        state.recorded = false;
+        rebuild();
+        renderLog();
+        updateUI();
+        Sfx.ui();
+      }, 30);
+    });
+  }
+
+  /** 詰め五目で攻め手が打った後、受けを自動で返す */
+  function handlePuzzleReply(x, y) {
+    var attacker = state.puzzle.attacker;
+    var result;
+    try {
+      result = Puzzle.respond(state.board, attacker, x, y);
+    } catch (err) {
+      result = { status: 'miss' };
+    }
+
+    if (result.status === 'win') {
+      // 受け無し。最後の五を自動で打ち、盤上に勝ち筋を見せてから終局する。
+      var winGen = state.gen;
+      renderLog();
+      updateUI();
+      flash('受け無し！ このまま五が作れます。');
+      if (result.finish) {
+        global.setTimeout(function () {
+          if (winGen === state.gen && !state.over) place(result.finish.x, result.finish.y, attacker);
+        }, 420);
+      }
+      return;
+    }
+
+    if (result.status === 'miss') {
+      state.puzzleState = 'failed';
+      if (!state.recorded) { recordPuzzle(false); state.recorded = true; }
+      renderLog();
+      updateUI();
+      Sfx.lose();
+      showAdvice('MISS', 'その手では詰みません。「戻る」で打ち直すか、'
+        + '「詰み筋」で正解の手順を確認できます。');
+      return;
+    }
+
+    // 受けは一意なので自動で打つ
+    var defender = B.opponent(attacker);
+    var gen = state.gen;
+    global.setTimeout(function () {
+      if (gen !== state.gen) return;
+      state.history.push({ x: result.reply.x, y: result.reply.y, player: defender });
+      state.cursor++;
+      state.board[B.idx(result.reply.x, result.reply.y)] = defender;
+      renderer.markPlaced(result.reply.x, result.reply.y, defender);
+      Sfx.place(defender);
+      renderLog();
+      updateUI();
+    }, 260);
+
+    renderLog();
+    updateUI();
+  }
+
+  function recordPuzzle(solved) {
+    var s = data.stats.puzzle;
+    if (!s) return;
+    if (solved) {
+      s.win++;
+      data.streak++;
+      if (data.streak > data.bestStreak) data.bestStreak = data.streak;
+    } else {
+      s.lose++;
+      data.streak = 0;
+    }
+    Store.save(data);
+  }
+
   /* ================= 巻き戻し / 早送り ================= */
   function step(delta) {
     var next = Math.max(0, Math.min(state.history.length, state.cursor + delta));
     if (next === state.cursor) { Sfx.error(); return; }
 
-    state.gen++;                 // 進行中のAI思考を無効化する
+    state.gen++;
     state.thinking = false;
     state.cursor = next;
     state.pending = null;
+    state.dragging = false;
+
+    if (state.mode === 'puzzle' && state.puzzleState !== 'idle') {
+      // 失敗からやり直せるようにする。成績はその問題で最初に確定した結果のみを数える
+      // （やり直しで正解数を水増しできないようにするため recorded は戻さない）。
+      state.puzzleState = 'solving';
+    }
 
     renderer.clearEffects();
     rebuild();
@@ -324,7 +503,6 @@
     updateUI();
   }
 
-  /** 最新の局面まで進めて対局を再開する */
   function toLatest() {
     if (atTip()) { Sfx.error(); return; }
     state.gen++;
@@ -358,11 +536,12 @@
 
   /* ================= 詰み筋（四追い / VCF） ================= */
   function doMate() {
-    if (state.over || state.thinking || state.busy) { Sfx.error(); return; }
+    if (state.thinking || state.busy) { Sfx.error(); return; }
+    if (state.over && state.mode !== 'puzzle') { Sfx.error(); return; }
     Sfx.ui();
     runAsync(el['btn-mate'], function () {
-      var player = currentPlayer();
-      var found = AI.findMate(state.board, player, { maxAttacks: 6, budget: 1600 });
+      var player = state.mode === 'puzzle' && state.puzzle ? state.puzzle.attacker : currentPlayer();
+      var found = AI.findMate(state.board, player, { maxAttacks: 10, budget: 3500 });
       if (!found) {
         renderer.setMate(null);
         state.mate = null;
@@ -408,7 +587,6 @@
     el['mate-list'].innerHTML = html;
   }
 
-  /** 重い計算を、描画を1フレーム挟んでから実行する */
   function runAsync(button, fn) {
     state.busy = true;
     if (button) button.classList.add('is-busy');
@@ -432,7 +610,6 @@
     el['advice-text'].innerHTML = html;
     el.advice.hidden = false;
     if (kind !== 'MATE') el['mate-nav'].hidden = true;
-    // 盤が大きい画面では画面外に出ることがあるので、必要なときだけ見える位置へ寄せる
     if (el.advice.scrollIntoView) {
       try { el.advice.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* 無視 */ }
     }
@@ -446,7 +623,6 @@
     if (renderer) { renderer.setHint(null); renderer.setMate(null); }
   }
 
-  /** 一時的なメッセージをステータス行に出す */
   var flashTimer = null;
   function flash(text) {
     el['status-text'].textContent = text;
@@ -454,83 +630,77 @@
     flashTimer = global.setTimeout(function () { flashTimer = null; updateUI(); }, 2800);
   }
 
-  /* ================= 入力（マウス / 指） ================= */
-  var pointerDown = false;
+  /* ================= 入力（押す → 動かす → 離す） ================= */
 
+  /** 指では大きめの許容範囲を取る（マス幅とほぼ同じ） */
   function hitTolerance(ev) {
-    // 指では大きめの許容範囲を取る（マス幅とほぼ同じ）
-    return (ev.pointerType === 'touch' || ev.pointerType === 'pen') ? 1.0 : 0.62;
-  }
-
-  /**
-   * タップ確認を使うかどうか。設定だけで決める。
-   * 以前はここで pointerType === 'touch' を無条件にORしていたため、
-   * 設定をOFFにしてもタッチ端末では効かなかった（既定値の自動判定は init 側の役目）。
-   */
-  function useConfirmFor() {
-    return state.confirmTap;
+    return (ev.pointerType === 'touch' || ev.pointerType === 'pen') ? 1.0 : 0.75;
   }
 
   function onPointerDown(ev) {
-    pointerDown = true;
     if (!canHumanPlay()) return;
     var cell = renderer.cellAt(ev.clientX, ev.clientY, hitTolerance(ev));
     if (!cell) return;
-    if (useConfirmFor()) {
-      // 押した時点で候補位置を表示する（指で隠れても十字線で位置が分かる）
-      renderer.setPending(cell, currentPlayer());
-      renderer.setHover(null);
-    } else {
-      renderer.setHover(cell, currentPlayer());
+
+    ev.preventDefault();
+    state.dragging = true;
+    state.pending = cell;
+    renderer.setPending(cell, currentPlayer());
+    renderer.setHover(null);
+    // 盤の外に指が出ても追跡できるようにする
+    if (el.board.setPointerCapture) {
+      try { el.board.setPointerCapture(ev.pointerId); } catch (e) { /* 無視 */ }
     }
+    updateUI();
   }
 
   function onPointerMove(ev) {
+    if (state.dragging) {
+      ev.preventDefault();
+      var cell = renderer.cellAt(ev.clientX, ev.clientY, hitTolerance(ev));
+      state.pending = cell;                       // 盤の外に出たら null になり、離しても打たれない
+      renderer.setPending(cell, currentPlayer());
+      updateUI();
+      return;
+    }
     if (!canHumanPlay()) { renderer.setHover(null); return; }
-    var cell = renderer.cellAt(ev.clientX, ev.clientY, hitTolerance(ev));
-    if (pointerDown && useConfirmFor()) {
-      if (cell) renderer.setPending(cell, currentPlayer());   // 指をずらして微調整できる
-    } else if (!useConfirmFor()) {
-      renderer.setHover(cell, currentPlayer());
+    if (ev.pointerType === 'mouse') {
+      renderer.setHover(renderer.cellAt(ev.clientX, ev.clientY, 0.62), currentPlayer());
     }
   }
 
   function onPointerUp(ev) {
-    pointerDown = false;
-    if (!canHumanPlay()) return;
-    var cell = renderer.cellAt(ev.clientX, ev.clientY, hitTolerance(ev));
+    if (!state.dragging) return;
+    state.dragging = false;
+    if (el.board.releasePointerCapture) {
+      try { el.board.releasePointerCapture(ev.pointerId); } catch (e) { /* 無視 */ }
+    }
 
-    if (!useConfirmFor()) {
-      if (cell) attemptPlace(cell.x, cell.y);
-      // 指では離した後にカーソルが残らないようにする
-      if (ev.pointerType !== 'mouse') renderer.setHover(null);
+    var target = state.pending;
+    state.pending = null;
+    renderer.setPending(null);
+
+    if (!target) {                                 // 盤の外で離した = 取り消し
+      Sfx.undo();
+      flash('着手を取り消しました。');
       return;
     }
-
-    var target = renderer.pending || cell;
-    if (!target) return;
-
-    if (state.pending && state.pending.x === target.x && state.pending.y === target.y) {
-      state.pending = null;                      // 2回目のタップ = 確定
-      attemptPlace(target.x, target.y);
-    } else {
-      state.pending = { x: target.x, y: target.y };   // 1回目のタップ = 位置決め
-      renderer.setPending(target, currentPlayer());
-      Sfx.ui();
-      updateUI();
-    }
+    attemptPlace(target.x, target.y);
   }
 
   function onPointerCancel() {
-    // スクロールなどで操作が取り消されたとき
-    pointerDown = false;
+    state.dragging = false;
     state.pending = null;
     renderer.setPending(null);
     updateUI();
   }
 
   /* ================= 戦績 ================= */
-  function statKey() { return state.mode === 'pvp' ? 'pvp' : state.level; }
+  function statKey() {
+    if (state.mode === 'pvp') return 'pvp';
+    if (state.mode === 'puzzle') return 'puzzle';
+    return state.level;
+  }
 
   function recordResult(winner) {
     var s = data.stats[statKey()];
@@ -562,8 +732,9 @@
     data.settings.mode = state.mode;
     data.settings.level = state.level;
     data.settings.first = state.first;
+    data.settings.ruleset = state.ruleset;
+    data.settings.puzzleLevel = el['puzzle-level'].value;
     data.settings.sound = Sfx.enabled;
-    data.settings.confirmTap = state.confirmTap;
     Store.save(data);
   }
 
@@ -573,6 +744,13 @@
       btn.classList.toggle('is-active', btn.dataset.mode === state.mode);
     });
     el['ai-options'].hidden = state.mode !== 'ai';
+    el['rule-field'].hidden = state.mode === 'puzzle';
+    el['puzzle-options'].hidden = state.mode !== 'puzzle';
+    el['btn-restart-label'].textContent = state.mode === 'puzzle' ? '次の問題' : '新規';
+  }
+
+  function syncRuleNote() {
+    el['rule-note'].textContent = Rules.get(state.ruleset).note;
   }
 
   function syncSoundButton() {
@@ -588,26 +766,37 @@
     if (Sfx.enabled) Sfx.ui();
   }
 
-  function syncConfirmButton() {
-    el['btn-confirm-tap'].innerHTML = 'タップ確認 ' + (state.confirmTap ? 'ON' : 'OFF') + ' <kbd>C</kbd>';
-    el['btn-confirm-tap'].setAttribute('aria-pressed', String(state.confirmTap));
-  }
-
-  function toggleConfirmTap() {
-    state.confirmTap = !state.confirmTap;
-    state.pending = null;
-    renderer.setPending(null);
-    syncConfirmButton();
-    persistSettings();
-    Sfx.ui();
-    flash(state.confirmTap
-      ? 'タップ確認 ON — 位置を決めてから、同じ場所をもう一度タップで着手します。'
-      : 'タップ確認 OFF — 1回のタップですぐ着手します。');
-  }
-
   function playerName(p) {
     if (state.mode === 'pvp') return p === B.P1 ? 'PLAYER 1' : 'PLAYER 2';
+    if (state.mode === 'puzzle') {
+      if (!state.puzzle) return p === B.P1 ? 'CYAN' : 'MAGENTA';
+      return p === state.puzzle.attacker ? 'あなた（攻め）' : '相手（受け）';
+    }
     return p === state.humanPlayer ? 'あなた' : 'CPU ' + LEVEL_LABEL[state.level];
+  }
+
+  function statusMessage() {
+    var cur = currentPlayer();
+    if (!atTip()) {
+      return state.cursor + ' / ' + state.history.length + '手目を表示中 — '
+        + (isAiSide(cur) ? 'この局面はCPUの手番です' : 'ここから打ち直せます');
+    }
+    if (state.busy) return '計算中…';
+    if (state.mode === 'puzzle') {
+      if (!state.puzzle) return '問題を準備しています…';
+      if (state.puzzleState === 'solved') return '正解！ 「次の問題」へ進めます';
+      if (state.puzzleState === 'failed') return 'その手では詰みません — 「戻る」で打ち直せます';
+      return state.puzzle.plies + '手で詰ませてください（四を打ち続けます）';
+    }
+    if (state.over) {
+      return state.winner === 0
+        ? '引き分け — 盤面が埋まりました'
+        : playerName(state.winner) + ' の勝利！';
+    }
+    if (state.thinking) return 'CPU ' + LEVEL_LABEL[state.level] + ' が思考中…';
+    if (state.pending) return B.toCoord(state.pending.x, state.pending.y) + ' — 離すとここに置きます';
+    if (state.dragging) return '盤の外で離すと取り消せます';
+    return playerName(cur) + ' の番です（' + (cur === B.P1 ? 'CYAN' : 'MAGENTA') + '）';
   }
 
   function updateUI() {
@@ -616,8 +805,13 @@
 
     el['p1-name'].textContent = playerName(B.P1);
     el['p2-name'].textContent = playerName(B.P2);
-    el['p1-tag'].textContent = '先手';
-    el['p2-tag'].textContent = '後手';
+    if (state.mode === 'puzzle' && state.puzzle) {
+      el['p1-tag'].textContent = state.puzzle.attacker === B.P1 ? '攻め' : '受け';
+      el['p2-tag'].textContent = state.puzzle.attacker === B.P2 ? '攻め' : '受け';
+    } else {
+      el['p1-tag'].textContent = '先手';
+      el['p2-tag'].textContent = '後手';
+    }
     el.p1.classList.toggle('is-turn', !state.over && cur === B.P1);
     el.p2.classList.toggle('is-turn', !state.over && cur === B.P2);
 
@@ -626,50 +820,45 @@
     if (frame) frame.classList.toggle('is-review', reviewing);
 
     if (!flashTimer) {
-      var dot = el['status-dot'], text = el['status-text'];
+      var dot = el['status-dot'];
       dot.className = 'dot' + (cur === B.P2 ? ' p2' : '');
-      if (reviewing) {
-        dot.className = 'dot idle';
-        text.textContent = state.cursor + ' / ' + state.history.length + '手目を表示中 — '
-          + (isAiSide(cur) ? 'この局面はCPUの手番です' : 'ここから打ち直せます');
-      } else if (state.over) {
-        dot.className = 'dot idle';
-        text.textContent = state.winner === 0
-          ? '引き分け — 盤面が埋まりました'
-          : playerName(state.winner) + ' の勝利！';
-      } else if (state.thinking) {
-        text.textContent = 'CPU ' + LEVEL_LABEL[state.level] + ' が思考中…';
-      } else if (state.busy) {
-        text.textContent = '読み筋を計算中…';
-      } else if (state.pending) {
-        text.textContent = B.toCoord(state.pending.x, state.pending.y)
-          + ' を選択中 — もう一度タップで着手します';
-      } else {
-        text.textContent = playerName(cur) + ' の番です（'
-          + (cur === B.P1 ? 'CYAN' : 'MAGENTA') + '）';
-      }
+      if (reviewing || state.over || state.busy) dot.className = 'dot idle';
+      el['status-text'].textContent = statusMessage();
     }
 
     var s = data.stats[statKey()] || { win: 0, lose: 0, draw: 0 };
-    el['s1-label'].textContent = state.mode === 'pvp' ? 'P1勝ち' : '勝利';
-    el['s2-label'].textContent = state.mode === 'pvp' ? 'P2勝ち' : '敗北';
-    el.s1.textContent = s.win;
-    el.s2.textContent = s.lose;
-    el.s3.textContent = s.draw;
+    if (state.mode === 'puzzle') {
+      el['s1-label'].textContent = '正解';
+      el['s2-label'].textContent = '失敗';
+      el['s3-label'].textContent = '出題';
+      el.s1.textContent = s.win;
+      el.s2.textContent = s.lose;
+      el.s3.textContent = s.win + s.lose;
+    } else {
+      el['s1-label'].textContent = state.mode === 'pvp' ? 'P1勝ち' : '勝利';
+      el['s2-label'].textContent = state.mode === 'pvp' ? 'P2勝ち' : '敗北';
+      el['s3-label'].textContent = '引分';
+      el.s1.textContent = s.win;
+      el.s2.textContent = s.lose;
+      el.s3.textContent = s.draw;
+    }
     el.streak.textContent = data.streak;
     el['best-streak'].textContent = data.bestStreak;
     el['move-count'].textContent = state.cursor;
 
     var locked = state.thinking || state.busy;
+    var finished = state.over || (state.mode === 'puzzle' && state.puzzleState === 'solved');
     el['btn-back'].disabled = locked || state.cursor === 0;
     el['btn-forward'].disabled = locked || atTip();
     el['btn-latest'].disabled = locked || atTip();
-    el['btn-hint'].disabled = locked || state.over;
-    el['btn-mate'].disabled = locked || state.over;
-    el.board.style.cursor = (canHumanPlay() && !state.confirmTap) ? 'crosshair' : 'default';
+    el['btn-hint'].disabled = locked || finished;
+    el['btn-mate'].disabled = locked || (finished && state.mode !== 'puzzle');
+    el['btn-restart'].disabled = locked;
+    // 決着後は「新規」を目立たせ、盤の直下から次に進めるようにする
+    el['btn-restart'].classList.toggle('is-primary', finished);
+    el.board.style.cursor = canHumanPlay() ? 'crosshair' : 'default';
   }
 
-  /** 棋譜ログ。巻き戻した先の手は薄く残し、「進む」で戻せることを示す。 */
   function renderLog() {
     var html = '';
     for (var i = state.history.length - 1; i >= 0; i--) {
@@ -687,8 +876,15 @@
   function showOverlay(winner) {
     var title = el['overlay-title'], sub = el['overlay-sub'], kicker = el['overlay-kicker'];
     title.className = 'overlay-title';
+    el['btn-rematch'].textContent = state.mode === 'puzzle' ? '次の問題' : 'もう一局';
 
-    if (winner === 0) {
+    if (state.mode === 'puzzle') {
+      kicker.textContent = 'SOLVED';
+      title.textContent = '正解！';
+      sub.textContent = state.puzzle
+        ? state.puzzle.plies + '手詰めを解きました。連続正解 ' + data.streak + '。'
+        : '詰みました。';
+    } else if (winner === 0) {
       kicker.textContent = 'DRAW';
       title.textContent = 'DRAW';
       title.classList.add('draw');
@@ -738,7 +934,6 @@
     else if (key === 'i' || key === 'I') { step(1); return; }
     else if (key === 'h' || key === 'H') { doHint(); return; }
     else if (key === 't' || key === 'T') { doMate(); return; }
-    else if (key === 'c' || key === 'C') { toggleConfirmTap(); return; }
     else if (key === 'm' || key === 'M') { toggleSound(); return; }
     else if (key === 'Escape') { hideOverlay(); clearAdvice(); return; }
 

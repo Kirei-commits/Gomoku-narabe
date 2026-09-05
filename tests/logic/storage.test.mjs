@@ -35,23 +35,35 @@ describe('storage — 保存と復元', () => {
     const ls = fakeStorage();
     const { Store } = loadCG(['storage.js'], { localStorage: ls });
     const d = Store.load();
-    assert.ok('confirmTap' in d.settings, 'confirmTap が既定値に定義されていない');
+    for (const key of ['mode', 'level', 'first', 'sound', 'ruleset', 'puzzleLevel']) {
+      assert.ok(key in d.settings, `${key} が既定値に定義されていない`);
+    }
 
-    d.settings.confirmTap = false;
     d.settings.first = 'ai';
     d.settings.sound = false;
+    d.settings.ruleset = 'renju';
+    d.settings.puzzleLevel = 'hard';
     Store.save(d);
 
     const { Store: Store2 } = loadCG(['storage.js'], { localStorage: ls });
     const again = Store2.load();
-    assert.equal(again.settings.confirmTap, false);
     assert.equal(again.settings.first, 'ai');
     assert.equal(again.settings.sound, false);
+    assert.equal(again.settings.ruleset, 'renju');
+    assert.equal(again.settings.puzzleLevel, 'hard');
   });
 
-  test('未設定の confirmTap は null（自動判定に委ねる）', () => {
-    const { Store } = loadCG(['storage.js'], { localStorage: fakeStorage() });
-    assert.equal(Store.load().settings.confirmTap, null);
+  test('詰め五目の成績も保存できる', () => {
+    const ls = fakeStorage();
+    const { Store } = loadCG(['storage.js'], { localStorage: ls });
+    const d = Store.load();
+    assert.ok(d.stats.puzzle, 'puzzle の成績枠が無い');
+    d.stats.puzzle.win = 4;
+    d.stats.puzzle.lose = 1;
+    Store.save(d);
+    const again = loadCG(['storage.js'], { localStorage: ls }).Store.load();
+    assert.equal(again.stats.puzzle.win, 4);
+    assert.equal(again.stats.puzzle.lose, 1);
   });
 
   test('reset で初期値に戻る', () => {

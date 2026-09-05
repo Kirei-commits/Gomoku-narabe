@@ -33,8 +33,13 @@ if (!refs.includes('css/style.css')) problems.push('index.html が css/style.css
 
 // 3. 読み込み順（board は ai/render/main より前）
 const order = [...html.matchAll(/<script src="js\/([^"]+)"><\/script>/g)].map((m) => m[1]);
-const need = [['board.js', 'ai.js'], ['board.js', 'render.js'], ['ai.js', 'main.js'],
-              ['render.js', 'main.js'], ['storage.js', 'main.js'], ['audio.js', 'main.js']];
+const need = [
+  ['board.js', 'ai.js'], ['board.js', 'render.js'],
+  ['ai.js', 'rules.js'],            // rules は AI のパターン判定を使う
+  ['ai.js', 'puzzle.js'], ['rules.js', 'puzzle.js'],
+  ['ai.js', 'main.js'], ['rules.js', 'main.js'], ['puzzle.js', 'main.js'],
+  ['render.js', 'main.js'], ['storage.js', 'main.js'], ['audio.js', 'main.js']
+];
 for (const [before, after] of need) {
   const i = order.indexOf(before), j = order.indexOf(after);
   if (i === -1 || j === -1 || i > j) problems.push(`読み込み順が不正: ${before} は ${after} より前に必要`);

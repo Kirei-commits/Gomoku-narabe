@@ -1,92 +1,71 @@
 import { test, expect } from '@playwright/test';
 import { openGame, usePvp } from './fixtures.mjs';
 
-// 指での操作に関する検証。mobile プロジェクト（hasTouch / pointer:coarse）でのみ動かす。
-test.describe('タッチ操作', () => {
-  test.skip(({ isMobile }) => !isMobile, 'タッチ端末向けの検証');
-
-  test('タッチ端末では既定でタップ確認がON', async ({ page }) => {
-    await openGame(page);
-    await expect(page.locator('#btn-confirm-tap')).toContainText('ON');
-    await expect(page.locator('#btn-confirm-tap')).toHaveAttribute('aria-pressed', 'true');
-  });
-
-  test('1回目のタップでは着手されず、位置が表示される', async ({ page }) => {
+test.describe('着手操作（押す→動かす→離す）', () => {
+  test('押して離すだけで着手できる', async ({ page }) => {
     const g = await openGame(page);
     await usePvp(page);
-    await g.tap(7, 7);
-    expect(await g.moveCount()).toBe(0);
-    await expect(page.locator('#status-text')).toContainText('H8');
-    await expect(page.locator('#status-text')).toContainText('選択中');
-  });
-
-  test('同じ場所を2回タップすると着手される', async ({ page }) => {
-    const g = await openGame(page);
-    await usePvp(page);
-    await g.tap(7, 7);
-    await g.tap(7, 7);
+    await g.place(7, 7);
     expect(await g.moveCount()).toBe(1);
     await expect(page.locator('#log li').first()).toContainText('H8');
   });
 
-  test('別のマスをタップすると選択位置が移る', async ({ page }) => {
+  test('押したまま動かすと狙いが移り、離した位置に置かれる', async ({ page }) => {
     const g = await openGame(page);
     await usePvp(page);
-    await g.tap(7, 7);
-    await g.tap(5, 5);
-    expect(await g.moveCount()).toBe(0);
-    await expect(page.locator('#status-text')).toContainText('F6');
-    await g.tap(5, 5);
+    await g.drag([7, 7], [9, 9]);
     expect(await g.moveCount()).toBe(1);
-    await expect(page.locator('#log li').first()).toContainText('F6');
+    await expect(page.locator('#log li').first()).toContainText('J10');
   });
 
-  // 感度の回帰防止: 交点から離れたタップでも最寄りの交点に入ること
-  for (const [dx, dy, label] of [[0.42, -0.40, '右上にずれたタップ'], [-0.45, 0.45, '左下にずれたタップ']]) {
-    test(`${label}でも最寄りの交点を選ぶ`, async ({ page }) => {
+  test('押している間は「離すとここに置きます」と表示される', async ({ page }) => {
+    const g = await openGame(page);
+    await usePvp(page);
+    const p = await g.point(7, 7);
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    await page.waitForTimeout(120);
+    await expect(page.locator('#status-text')).toContainText('H8');
+    await expect(page.locator('#status-text')).toContainText('離すと');
+    expect(await g.moveCount()).toBe(0);         // 離すまでは置かれない
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+    expect(await g.moveCount()).toBe(1);
+  });
+
+  test('盤の外まで動かして離すと取り消される', async ({ page }) => {
+    const g = await openGame(page);
+    await usePvp(page);
+    await g.drag([7, 7], null, { releaseOutside: true });
+    expect(await g.moveCount()).toBe(0);
+    await expect(page.locator('#status-text')).toContainText('取り消');
+  });
+
+  // 感度の回帰防止: 交点から離れた位置を押しても最寄りの交点に入ること
+  for (const [dx, dy, label] of [[0.42, -0.40, '右上にずれた位置'], [-0.45, 0.45, '左下にずれた位置']]) {
+    test(`${label}を押しても最寄りの交点に置かれる`, async ({ page }) => {
       const g = await openGame(page);
       await usePvp(page);
-      await g.tap(9, 9, { offsetX: dx, offsetY: dy });
-      await expect(page.locator('#status-text')).toContainText('J10');
-      await g.tap(9, 9, { offsetX: dx, offsetY: dy });
+      await g.place(9, 9, { offsetX: dx, offsetY: dy });
       expect(await g.moveCount()).toBe(1);
+      await expect(page.locator('#log li').first()).toContainText('J10');
     });
   }
 
-  test('盤の角(A1)にも打てる', async ({ page }) => {
+  test('盤の四隅にも置ける', async ({ page }) => {
     const g = await openGame(page);
     await usePvp(page);
-    await g.tap(0, 0, { offsetX: -0.3, offsetY: -0.3 });
-    await g.tap(0, 0, { offsetX: -0.3, offsetY: -0.3 });
-    expect(await g.moveCount()).toBe(1);
+    await g.place(0, 0, { offsetX: -0.3, offsetY: -0.3 });
     await expect(page.locator('#log li').first()).toContainText('A1');
-  });
-
-  test('盤の反対の角(O15)にも打てる', async ({ page }) => {
-    const g = await openGame(page);
-    await usePvp(page);
-    await g.tap(14, 14, { offsetX: 0.3, offsetY: 0.3 });
-    await g.tap(14, 14, { offsetX: 0.3, offsetY: 0.3 });
-    expect(await g.moveCount()).toBe(1);
+    await g.place(14, 14, { offsetX: 0.3, offsetY: 0.3 });
     await expect(page.locator('#log li').first()).toContainText('O15');
-  });
-
-  test('タップ確認をOFFにすると1回のタップで着手する', async ({ page }) => {
-    const g = await openGame(page);
-    await usePvp(page);
-    await page.locator('#btn-confirm-tap').click();
-    await expect(page.locator('#btn-confirm-tap')).toContainText('OFF');
-    await g.tap(7, 7);
-    await g.tap(5, 5);                            // 確認が不要なので1タップずつ着手される
     expect(await g.moveCount()).toBe(2);
   });
 
-  test('タップ確認の設定はリロード後も保持される', async ({ page }) => {
+  test('盤の上ではページがスクロールしない', async ({ page }) => {
     await openGame(page);
-    await page.locator('#btn-confirm-tap').click();
-    await expect(page.locator('#btn-confirm-tap')).toContainText('OFF');
-    await page.reload();
-    await page.waitForTimeout(400);
-    await expect(page.locator('#btn-confirm-tap')).toContainText('OFF');
+    const style = await page.evaluate(
+      () => getComputedStyle(document.getElementById('board')).touchAction);
+    expect(style).toBe('none');
   });
 });

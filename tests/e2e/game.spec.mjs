@@ -29,6 +29,30 @@ test.describe('対局の基本', () => {
     expect(g.errors).toEqual([]);
   });
 
+  // 回帰: 決着後に「盤面を見る」を押すと、盤の直下から次に進む手段が無くなっていた
+  test('決着後に結果を閉じても、盤の直下から次の対局を始められる', async ({ page }) => {
+    const g = await openGame(page);
+    await usePvp(page);
+    for (const [x, y] of [[7, 7], [0, 0], [8, 7], [0, 1], [9, 7], [0, 2], [10, 7], [0, 3], [11, 7]]) {
+      await g.place(x, y);
+    }
+    await expect(page.locator('#overlay')).toBeVisible({ timeout: 5000 });
+
+    await page.locator('#btn-close-overlay').click();
+    await expect(page.locator('#overlay')).toBeHidden();
+
+    // 盤の直下の「新規」が押せて、強調表示になっている
+    await expect(page.locator('#btn-restart')).toBeEnabled();
+    await expect(page.locator('#btn-restart')).toHaveClass(/is-primary/);
+    await page.locator('#btn-restart').click();
+    await page.waitForTimeout(300);
+    expect(await g.moveCount()).toBe(0);
+    await expect(page.locator('#btn-restart')).not.toHaveClass(/is-primary/);
+
+    await g.place(7, 7);                    // 続けて打てる
+    expect(await g.moveCount()).toBe(1);
+  });
+
   test('埋まっているマスには打てない', async ({ page }) => {
     const g = await openGame(page);
     await usePvp(page);

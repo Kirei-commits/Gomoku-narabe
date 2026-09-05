@@ -12,9 +12,11 @@
 index.html          マークアップ。<script> の並び順が依存関係そのもの
 css/style.css       テーマ・レイアウト・アニメーション
 js/board.js         盤面と勝敗判定（純粋ロジック。他に依存しない）
+js/ai.js            AI（脅威評価 + αβ探索 + 四追い探索）。board に依存
+js/rules.js         禁じ手の判定（長連・三三・四四）。board と ai に依存
+js/puzzle.js        詰め五目の生成と解答判定。board と ai に依存
 js/storage.js       localStorage 永続化
 js/audio.js         Web Audio API による効果音の合成
-js/ai.js            AI（脅威評価 + αβ探索 + 四追い探索）。board に依存
 js/render.js        Canvas 描画とエフェクト。board に依存
 js/main.js          ゲーム進行とUIバインド。上記すべてに依存
 tests/              テスト（下記）
@@ -46,6 +48,13 @@ npm test             # 上記すべて
    深さと候補数だけでなく `deadline` で必ず打ち切る。
 5. **乱数を直接呼ばない。** EASY のゆらぎは `AI.setRandom()` で差し替え可能な
    `rng()` を経由する。テストを決定的にするため。
+6. **着手は「押す→動かす→離す」の1つの操作に統一する。** 端末による分岐を作らない。
+   盤には `touch-action: none` が必要（指で動かしたときにページがスクロールしないため）。
+   代わりにページのスクロールは盤の外側で行う前提にしている。
+7. **禁じ手のあるルールでは AI も従う。** `AI.setRules()` で適用中のルールを渡し、
+   候補手・四追い・勝ち判定のすべてで禁じ手を除外する。
+8. **設定キーは必ず `Store.DEFAULTS.settings` に定義する。** 定義漏れのキーは
+   `merge()` で捨てられ、保存しても復元されない（実際にこれで不具合を出した）。
 
 ## テストの構成
 
