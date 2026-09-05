@@ -1,0 +1,255 @@
+/**
+ * ai.js — 五目並べAI
+ *
+ * 判断は次の階層で行う（上位で決まればそこで確定）:
+ *   1. 自分が即勝ちできる手
+ *   2. 相手の即勝ちを止める手
+ *   3. 自分の四/両三など決定的な脅威を作る手
+ *   4. 相手の決定的な脅威を潰す手
+ *   5. αβ枝刈り付きネガマックス探索（HARD）／評価値グリーディ（NORMAL・EASY）
+ */
+(function (global) {
+  'use strict';
+
+  var B = global.CG.Board;
+  var SIZE = B.SIZE, EMPTY = B.EMPTY;
+
+  /* --- パターン評価 ------------------------------------------------ */
+  var SCORE = {
+    FIVE:  1000000,
+    OPEN4:  100000,
+    FOUR:    10000,
+    OPEN3:    8000,
+    THREE:     800,
+    OPEN2:     100,
+    TWO:        10,
+    ONE:         1
+  };
+
+  /* 自石='1' / 空='0' / 相手石・壁='2' で表した並びに対するスコア表 */
+  var PATTERNS = [
+    { s: SCORE.FIVE,  n: 5, p: ['11111'] },
+    { s: SCORE.OPEN4, n: 4, p: ['011110'] },
+    { s: SCORE.FOUR,  n: 4, p: ['011112', '211110', '11011', '10111', '11101'] },
+    { s: SCORE.OPEN3, n: 3, p: ['011100', '001110', '011010', '010110'] },
+    { s: SCORE.THREE, n: 3, p: ['001112', '211100', '011012', '210110', '10011', '11001', '10101'] },
+    { s: SCORE.OPEN2, n: 2, p: ['001100', '011000', '000110', '010100', '001010'] },
+    { s: SCORE.TWO,   n: 2, p: ['001102', '201100', '10001', '01001', '10010'] }
+  ];
+
+  var LINE_RADIUS = 4; // 中心 ±4 の 9 マスを見る
+
+  /**
+   * (x,y) に player を置いたと仮定したときの手の強さ。
+   * 4方向それぞれで最大パターンを取り、合計する（両三などの複合脅威は合算で評価される）。
+   */
+  function evalPoint(board, x, y, player) {
+    if (board[B.idx(x, y)] !== EMPTY) return -1;
+    var total = 0;
+
+    for (var d = 0; d < B.DIRS.length; d++) {
+      var dx = B.DIRS[d][0], dy = B.DIRS[d][1];
+      var line = '', ones = 1;
+      for (var k = -LINE_RADIUS; k <= LINE_RADIUS; k++) {
+        if (k === 0) { line += '1'; continue; }
+        var v = B.get(board, x + dx * k, y + dy * k);
+        if (v === player) { line += '1'; ones++; }
+        else { line += (v === EMPTY ? '0' : '2'); } // 盤外(-1)と相手石はどちらも '2'
+      }
+      total += matchLine(line, ones);
+    }
+    // 中央に近いほうがわずかに有利（同点時の指し手を安定させる）
+    var c = (SIZE - 1) / 2;
+    total += Math.max(0, 6 - (Math.abs(x - c) + Math.abs(y - c)) * 0.4);
+    return total;
+  }
+
+  /** 並び文字列に最も高く合致するパターンのスコア（自石数で候補を絞り高速化） */
+  function matchLine(line, ones) {
+    for (var i = 0; i < PATTERNS.length; i++) {
+      if (PATTERNS[i].n > ones) continue; // 石数が足りないパターン群は照合不要
+      var list = PATTERNS[i].p;
+      for (var j = 0; j < list.length; j++) {
+        if (line.indexOf(list[j]) !== -1) return PATTERNS[i].s;
+      }
+    }
+    return SCORE.ONE;
+  }
+
+  /* --- 局面全体の静的評価（探索の葉で使用） ------------------------ */
+  var W = [0, 1, 14, 180, 3200, 1000000]; // 窓内の自石数 → 得点
+
+  function windowScore(a, b) {
+    if (a > 0 && b > 0) return 0;      // 両者混在の窓は死んでいる
+    if (a > 0) return W[a];
+    if (b > 0) return -W[b] * 1.15;    // 守りをわずかに重く見る
+    return 0;
+  }
+
+  function evalBoard(board, me) {
+    var opp = B.opponent(me);
+    var total = 0, x, y, k, a, b, v;
+
+    for (y = 0; y < SIZE; y++) {
+      for (x = 0; x < SIZE; x++) {
+        for (var d = 0; d < B.DIRS.length; d++) {
+          var dx = B.DIRS[d][0], dy = B.DIRS[d][1];
+          var ex = x + dx * 4, ey = y + dy * 4;
+          if (!B.inBounds(ex, ey)) continue;
+          a = 0; b = 0;
+          for (k = 0; k < 5; k++) {
+            v = board[B.idx(x + dx * k, y + dy * k)];
+            if (v === me) a++; else if (v === opp) b++;
+          }
+          total += windowScore(a, b);
+        }
+      }
+    }
+    return total;
+  }
+
+  /* --- 候補手の生成と並べ替え -------------------------------------- */
+  function rankedMoves(board, player, limit, defense, range) {
+    var opp = B.opponent(player);
+    var cands = B.candidates(board, range || 2);
+    var scored = [];
+
+    for (var i = 0; i < cands.length; i++) {
+      var x = cands[i][0], y = cands[i][1];
+      var mine = evalPoint(board, x, y, player);
+      var theirs = evalPoint(board, x, y, opp);
+      scored.push({ x: x, y: y, mine: mine, theirs: theirs, score: mine + theirs * defense });
+    }
+    scored.sort(function (p, q) { return q.score - p.score; });
+    return limit ? scored.slice(0, limit) : scored;
+  }
+
+  /* --- 探索 --------------------------------------------------------- */
+  var WIN_VALUE = 5000000;
+
+  function now() {
+    return (global.performance && global.performance.now) ? global.performance.now() : Date.now();
+  }
+
+  function negamax(board, player, depth, alpha, beta, branch, deadline) {
+    if (depth === 0) return evalBoard(board, player);
+
+    // 深い階層ほど候補を絞る（探索範囲も隣接1マスに限定してコストを抑える）
+    var width = depth >= 3 ? branch : Math.max(4, branch - 2 * (3 - depth));
+    var moves = rankedMoves(board, player, width, 1.0, 1);
+    if (!moves.length) return evalBoard(board, player);
+
+    var best = -Infinity;
+    for (var i = 0; i < moves.length; i++) {
+      var m = moves[i], id = B.idx(m.x, m.y);
+      board[id] = player;
+      var value;
+      if (B.findWinLine(board, m.x, m.y)) {
+        value = WIN_VALUE + depth;                       // 早く勝てるほど高評価
+      } else {
+        value = -negamax(board, B.opponent(player), depth - 1, -beta, -alpha, branch, deadline);
+      }
+      board[id] = EMPTY;
+
+      if (value > best) best = value;
+      if (best > alpha) alpha = best;
+      if (alpha >= beta) break;                          // βカット
+      if (now() > deadline) break;                       // 時間切れは打ち切り
+    }
+    return best;
+  }
+
+  /* --- 手の決定 ----------------------------------------------------- */
+  var LEVELS = {
+    easy:   { depth: 0, branch: 6,  defense: 0.55, noise: 0.9,  budget: 120 },
+    normal: { depth: 2, branch: 8,  defense: 0.95, noise: 0.12, budget: 400 },
+    hard:   { depth: 4, branch: 10, defense: 1.05, noise: 0,    budget: 900 }
+  };
+
+  /**
+   * @param {Int8Array} board 盤面（この関数は盤面を書き換えない）
+   * @param {number} player   AIの石
+   * @param {string} level    'easy' | 'normal' | 'hard'
+   * @returns {{x:number, y:number}}
+   */
+  function chooseMove(board, player, level) {
+    var cfg = LEVELS[level] || LEVELS.normal;
+    var work = Int8Array.from(board);
+    var moves = rankedMoves(work, player, 0, cfg.defense);
+
+    if (!moves.length) {
+      var c = (SIZE - 1) >> 1;
+      return { x: c, y: c };
+    }
+
+    // 1. 自分の即勝ち
+    var win = pickBy(moves, function (m) { return m.mine >= SCORE.FIVE; }, 'mine');
+    if (win) return xy(win);
+
+    // 2. 相手の即勝ちを阻止
+    var block = pickBy(moves, function (m) { return m.theirs >= SCORE.FIVE; }, 'mine');
+    if (block) return xy(block);
+
+    if (level !== 'easy') {
+      // 3. 自分の決定的な脅威（四・両三）
+      var threat = pickBy(moves, function (m) { return m.mine >= SCORE.OPEN4; }, 'mine');
+      if (threat) return xy(threat);
+
+      // 4. 相手の決定的な脅威を先に潰す
+      var counter = pickBy(moves, function (m) { return m.theirs >= SCORE.OPEN4; }, 'mine');
+      if (counter) return xy(counter);
+    }
+
+    // 5. 探索 or グリーディ
+    if (cfg.depth > 0) {
+      var deadline = now() + cfg.budget;
+      var top = moves.slice(0, cfg.branch);
+      var bestMove = top[0], bestValue = -Infinity, alpha = -Infinity;
+
+      for (var i = 0; i < top.length; i++) {
+        var m = top[i], id = B.idx(m.x, m.y);
+        work[id] = player;
+        var value = B.findWinLine(work, m.x, m.y)
+          ? WIN_VALUE + cfg.depth
+          : -negamax(work, B.opponent(player), cfg.depth - 1, -Infinity, -alpha, cfg.branch, deadline);
+        work[id] = EMPTY;
+
+        if (value > bestValue) { bestValue = value; bestMove = m; }
+        if (value > alpha) alpha = value;
+        if (now() > deadline) break;
+      }
+      return xy(bestMove);
+    }
+
+    // EASY: 上位候補からゆらぎ付きで選ぶ
+    var pool = moves.slice(0, cfg.branch);
+    var top1 = pool[0].score;
+    var picked = pool[0];
+    var bestNoisy = -Infinity;
+    for (var k = 0; k < pool.length; k++) {
+      var noisy = pool[k].score + Math.random() * top1 * cfg.noise;
+      if (noisy > bestNoisy) { bestNoisy = noisy; picked = pool[k]; }
+    }
+    return xy(picked);
+  }
+
+  /** 条件に合う手のうち tie は key の大きいものを選ぶ */
+  function pickBy(moves, test, key) {
+    var best = null;
+    for (var i = 0; i < moves.length; i++) {
+      if (!test(moves[i])) continue;
+      if (!best || moves[i][key] > best[key]) best = moves[i];
+    }
+    return best;
+  }
+
+  function xy(m) { return { x: m.x, y: m.y }; }
+
+  global.CG.AI = {
+    chooseMove: chooseMove,
+    evalPoint: evalPoint,
+    evalBoard: evalBoard,
+    SCORE: SCORE,
+    LEVELS: LEVELS
+  };
+})(window);

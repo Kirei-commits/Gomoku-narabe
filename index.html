@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<meta name="description" content="ネオンが走るサイバーパンク五目並べ。AI対戦と2人プレイに対応。" />
+<title>NEURO GOMOKU // 五目並べ</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23050810'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%2300e5ff' stroke-width='3'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="scanlines" aria-hidden="true"></div>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <h1 class="logo" data-text="NEURO GOMOKU">NEURO<span>GOMOKU</span></h1>
+    <p class="tagline">// 五目並べ &nbsp;·&nbsp; ver 1.0 &nbsp;·&nbsp; NEON PROTOCOL</p>
+  </header>
+
+  <main class="layout">
+    <!-- ===== 盤面 ===== -->
+    <section class="board-area">
+      <div class="board-frame">
+        <div class="corner tl"></div><div class="corner tr"></div>
+        <div class="corner bl"></div><div class="corner br"></div>
+        <canvas id="board" width="600" height="600" role="grid"
+                aria-label="五目並べの盤面 15かける15" tabindex="0"></canvas>
+
+        <div id="overlay" class="overlay" hidden>
+          <div class="overlay-card">
+            <p id="overlay-kicker" class="overlay-kicker">RESULT</p>
+            <h2 id="overlay-title" class="overlay-title">WIN</h2>
+            <p id="overlay-sub" class="overlay-sub"></p>
+            <div class="overlay-actions">
+              <button id="btn-rematch" class="btn btn-primary" type="button">再戦する</button>
+              <button id="btn-close-overlay" class="btn" type="button">盤面を見る</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p id="status" class="status" role="status" aria-live="polite">
+        <span class="dot" id="status-dot"></span><span id="status-text">対局開始 — 先手の番です</span>
+      </p>
+    </section>
+
+    <!-- ===== サイドパネル ===== -->
+    <aside class="panel">
+      <div class="card">
+        <h2 class="card-title">MODE</h2>
+        <div class="seg" role="group" aria-label="対戦モード">
+          <button class="seg-btn is-active" type="button" data-mode="ai">1P <small>vs AI</small></button>
+          <button class="seg-btn" type="button" data-mode="pvp">2P <small>対人</small></button>
+        </div>
+
+        <div id="ai-options">
+          <label class="field">
+            <span class="field-label">難易度</span>
+            <select id="level" class="select">
+              <option value="easy">EASY — 練習用</option>
+              <option value="normal" selected>NORMAL — 標準</option>
+              <option value="hard">HARD — 本気</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">手番</span>
+            <select id="first" class="select">
+              <option value="human" selected>あなたが先手（CYAN）</option>
+              <option value="ai">AIが先手（あなたはMAGENTA）</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">PLAYERS</h2>
+        <div class="players">
+          <div class="player is-turn" id="p1">
+            <span class="chip chip-p1"></span>
+            <span class="p-name" id="p1-name">PLAYER 1</span>
+            <span class="p-tag" id="p1-tag">先手</span>
+          </div>
+          <div class="player" id="p2">
+            <span class="chip chip-p2"></span>
+            <span class="p-name" id="p2-name">CPU</span>
+            <span class="p-tag" id="p2-tag">後手</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">SCORE <button id="btn-reset-score" class="link-btn" type="button">リセット</button></h2>
+        <dl class="score" id="score">
+          <div><dt id="s1-label">勝利</dt><dd id="s1">0</dd></div>
+          <div><dt id="s2-label">敗北</dt><dd id="s2">0</dd></div>
+          <div><dt>引分</dt><dd id="s3">0</dd></div>
+        </dl>
+        <p class="streak">連勝 <b id="streak">0</b> <span class="sep">/</span> 最高 <b id="best-streak">0</b></p>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">CONTROL</h2>
+        <div class="btn-row">
+          <button id="btn-new" class="btn btn-primary" type="button">新規対局 <kbd>R</kbd></button>
+          <button id="btn-undo" class="btn" type="button">待った <kbd>U</kbd></button>
+          <button id="btn-sound" class="btn" type="button" aria-pressed="true">♪ SOUND ON <kbd>M</kbd></button>
+        </div>
+        <p class="hint">クリック / タップで着手。矢印キー＋Enterでも操作できます。</p>
+      </div>
+
+      <div class="card log-card">
+        <h2 class="card-title">LOG <span class="moves">手数 <b id="move-count">0</b></span></h2>
+        <ol id="log" class="log" reversed></ol>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="footer">15×15 / 5目そろえたら勝ち &nbsp;·&nbsp; データはブラウザ内(localStorage)にのみ保存されます</footer>
+
+  <script src="js/board.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
